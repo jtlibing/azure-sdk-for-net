@@ -26,11 +26,9 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Hyak.Common;
 using Microsoft.Azure.Management.Automation;
 using Microsoft.Azure.Management.Automation.Models;
-using Microsoft.WindowsAzure;
-using Microsoft.WindowsAzure.Common;
-using Microsoft.WindowsAzure.Common.Internals;
 using Newtonsoft.Json.Linq;
 
 namespace Microsoft.Azure.Management.Automation
@@ -94,23 +92,41 @@ namespace Microsoft.Azure.Management.Automation
             }
             
             // Tracing
-            bool shouldTrace = CloudContext.Configuration.Tracing.IsEnabled;
+            bool shouldTrace = TracingAdapter.IsEnabled;
             string invocationId = null;
             if (shouldTrace)
             {
-                invocationId = Tracing.NextInvocationId.ToString();
+                invocationId = TracingAdapter.NextInvocationId.ToString();
                 Dictionary<string, object> tracingParameters = new Dictionary<string, object>();
                 tracingParameters.Add("automationAccount", automationAccount);
                 tracingParameters.Add("runbookVersionId", runbookVersionId);
-                Tracing.Enter(invocationId, this, "ListByRunbookVersionIdAsync", tracingParameters);
+                TracingAdapter.Enter(invocationId, this, "ListByRunbookVersionIdAsync", tracingParameters);
             }
             
             // Construct URL
-            string url = "/" + (this.Client.Credentials.SubscriptionId != null ? this.Client.Credentials.SubscriptionId.Trim() : "") + "/cloudservices/OaaSCS/resources/automation/~/Accounts/" + automationAccount.Trim() + "/RunbookParameters?";
-            bool appendFilter = true;
-            appendFilter = false;
-            url = url + "$filter=" + "RunbookVersionID eq guid'" + Uri.EscapeDataString(runbookVersionId.Trim()) + "'";
-            url = url + "&api-version=2014-03-13_Preview";
+            string url = "";
+            url = url + "/";
+            if (this.Client.Credentials.SubscriptionId != null)
+            {
+                url = url + Uri.EscapeDataString(this.Client.Credentials.SubscriptionId);
+            }
+            url = url + "/cloudservices/OaaSCS/resources/";
+            url = url + "automation";
+            url = url + "/~/Accounts/";
+            url = url + Uri.EscapeDataString(automationAccount);
+            url = url + "/RunbookParameters";
+            List<string> queryParameters = new List<string>();
+            List<string> odataFilter = new List<string>();
+            odataFilter.Add("RunbookVersionID eq guid'" + Uri.EscapeDataString(runbookVersionId) + "'");
+            if (odataFilter.Count > 0)
+            {
+                queryParameters.Add("$filter=" + string.Join(null, odataFilter));
+            }
+            queryParameters.Add("api-version=2014-03-13_Preview");
+            if (queryParameters.Count > 0)
+            {
+                url = url + "?" + string.Join("&", queryParameters);
+            }
             string baseUrl = this.Client.BaseUri.AbsoluteUri;
             // Trim '/' character from the end of baseUrl and beginning of url.
             if (baseUrl[baseUrl.Length - 1] == '/')
@@ -148,13 +164,13 @@ namespace Microsoft.Azure.Management.Automation
                 {
                     if (shouldTrace)
                     {
-                        Tracing.SendRequest(invocationId, httpRequest);
+                        TracingAdapter.SendRequest(invocationId, httpRequest);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     httpResponse = await this.Client.HttpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
                     if (shouldTrace)
                     {
-                        Tracing.ReceiveResponse(invocationId, httpResponse);
+                        TracingAdapter.ReceiveResponse(invocationId, httpResponse);
                     }
                     HttpStatusCode statusCode = httpResponse.StatusCode;
                     if (statusCode != HttpStatusCode.OK)
@@ -163,7 +179,7 @@ namespace Microsoft.Azure.Management.Automation
                         CloudException ex = CloudException.Create(httpRequest, null, httpResponse, await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
                         if (shouldTrace)
                         {
-                            Tracing.Error(invocationId, ex);
+                            TracingAdapter.Error(invocationId, ex);
                         }
                         throw ex;
                     }
@@ -171,63 +187,66 @@ namespace Microsoft.Azure.Management.Automation
                     // Create Result
                     RunbookParameterListResponse result = null;
                     // Deserialize Response
-                    cancellationToken.ThrowIfCancellationRequested();
-                    string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    result = new RunbookParameterListResponse();
-                    JToken responseDoc = null;
-                    if (string.IsNullOrEmpty(responseContent) == false)
+                    if (statusCode == HttpStatusCode.OK)
                     {
-                        responseDoc = JToken.Parse(responseContent);
-                    }
-                    
-                    if (responseDoc != null && responseDoc.Type != JTokenType.Null)
-                    {
-                        JToken valueArray = responseDoc["value"];
-                        if (valueArray != null && valueArray.Type != JTokenType.Null)
+                        cancellationToken.ThrowIfCancellationRequested();
+                        string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        result = new RunbookParameterListResponse();
+                        JToken responseDoc = null;
+                        if (string.IsNullOrEmpty(responseContent) == false)
                         {
-                            foreach (JToken valueValue in ((JArray)valueArray))
+                            responseDoc = JToken.Parse(responseContent);
+                        }
+                        
+                        if (responseDoc != null && responseDoc.Type != JTokenType.Null)
+                        {
+                            JToken valueArray = responseDoc["value"];
+                            if (valueArray != null && valueArray.Type != JTokenType.Null)
                             {
-                                RunbookParameter runbookParameterInstance = new RunbookParameter();
-                                result.RunbookParameters.Add(runbookParameterInstance);
-                                
-                                JToken runbookVersionIDValue = valueValue["RunbookVersionID"];
-                                if (runbookVersionIDValue != null && runbookVersionIDValue.Type != JTokenType.Null)
+                                foreach (JToken valueValue in ((JArray)valueArray))
                                 {
-                                    string runbookVersionIDInstance = ((string)runbookVersionIDValue);
-                                    runbookParameterInstance.RunbookVersionId = runbookVersionIDInstance;
-                                }
-                                
-                                JToken nameValue = valueValue["Name"];
-                                if (nameValue != null && nameValue.Type != JTokenType.Null)
-                                {
-                                    string nameInstance = ((string)nameValue);
-                                    runbookParameterInstance.Name = nameInstance;
-                                }
-                                
-                                JToken typeValue = valueValue["Type"];
-                                if (typeValue != null && typeValue.Type != JTokenType.Null)
-                                {
-                                    string typeInstance = ((string)typeValue);
-                                    runbookParameterInstance.Type = typeInstance;
-                                }
-                                
-                                JToken isMandatoryValue = valueValue["IsMandatory"];
-                                if (isMandatoryValue != null && isMandatoryValue.Type != JTokenType.Null)
-                                {
-                                    bool isMandatoryInstance = ((bool)isMandatoryValue);
-                                    runbookParameterInstance.IsMandatory = isMandatoryInstance;
-                                }
-                                
-                                JToken positionValue = valueValue["Position"];
-                                if (positionValue != null && positionValue.Type != JTokenType.Null)
-                                {
-                                    int positionInstance = ((int)positionValue);
-                                    runbookParameterInstance.Position = positionInstance;
+                                    RunbookParameter runbookParameterInstance = new RunbookParameter();
+                                    result.RunbookParameters.Add(runbookParameterInstance);
+                                    
+                                    JToken runbookVersionIDValue = valueValue["RunbookVersionID"];
+                                    if (runbookVersionIDValue != null && runbookVersionIDValue.Type != JTokenType.Null)
+                                    {
+                                        string runbookVersionIDInstance = ((string)runbookVersionIDValue);
+                                        runbookParameterInstance.RunbookVersionId = runbookVersionIDInstance;
+                                    }
+                                    
+                                    JToken nameValue = valueValue["Name"];
+                                    if (nameValue != null && nameValue.Type != JTokenType.Null)
+                                    {
+                                        string nameInstance = ((string)nameValue);
+                                        runbookParameterInstance.Name = nameInstance;
+                                    }
+                                    
+                                    JToken typeValue = valueValue["Type"];
+                                    if (typeValue != null && typeValue.Type != JTokenType.Null)
+                                    {
+                                        string typeInstance = ((string)typeValue);
+                                        runbookParameterInstance.Type = typeInstance;
+                                    }
+                                    
+                                    JToken isMandatoryValue = valueValue["IsMandatory"];
+                                    if (isMandatoryValue != null && isMandatoryValue.Type != JTokenType.Null)
+                                    {
+                                        bool isMandatoryInstance = ((bool)isMandatoryValue);
+                                        runbookParameterInstance.IsMandatory = isMandatoryInstance;
+                                    }
+                                    
+                                    JToken positionValue = valueValue["Position"];
+                                    if (positionValue != null && positionValue.Type != JTokenType.Null)
+                                    {
+                                        int positionInstance = ((int)positionValue);
+                                        runbookParameterInstance.Position = positionInstance;
+                                    }
                                 }
                             }
                         }
+                        
                     }
-                    
                     result.StatusCode = statusCode;
                     if (httpResponse.Headers.Contains("x-ms-request-id"))
                     {
@@ -236,7 +255,7 @@ namespace Microsoft.Azure.Management.Automation
                     
                     if (shouldTrace)
                     {
-                        Tracing.Exit(invocationId, result);
+                        TracingAdapter.Exit(invocationId, result);
                     }
                     return result;
                 }

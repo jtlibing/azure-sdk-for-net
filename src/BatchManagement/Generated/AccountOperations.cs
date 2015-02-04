@@ -29,12 +29,11 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Hyak.Common;
+using Hyak.Common.Internals;
+using Microsoft.Azure;
 using Microsoft.Azure.Management.Batch;
 using Microsoft.Azure.Management.Batch.Models;
-using Microsoft.WindowsAzure;
-using Microsoft.WindowsAzure.Common;
-using Microsoft.WindowsAzure.Common.Internals;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace Microsoft.Azure.Management.Batch
@@ -78,10 +77,11 @@ namespace Microsoft.Azure.Management.Batch
         /// <param name='accountName'>
         /// Required. A name for the Batch account which must be unique within
         /// Azure. Batch account names must be between 3 and 24 characters in
-        /// length, and must use numbers and lower-case letters only. This
-        /// name is the DNS prefix name and can be used to access the batch
-        /// service in the region in which the account is created. For
-        /// example: http://AccountName.task.core.windows.net/.
+        /// length, must use only numbers and lower-case letters and not start
+        /// with a number. This name is used as part of the DNS name that is
+        /// used to access the batch service in the region in which the
+        /// account is created. For example:
+        /// http://AccountName.batch.core.windows.net/.
         /// </param>
         /// <param name='parameters'>
         /// Required. Additional parameters for account creation
@@ -111,28 +111,45 @@ namespace Microsoft.Azure.Management.Batch
             {
                 throw new ArgumentOutOfRangeException("accountName");
             }
-            // TODO: Validate accountName is a valid DNS name.
             if (parameters == null)
             {
                 throw new ArgumentNullException("parameters");
             }
             
             // Tracing
-            bool shouldTrace = CloudContext.Configuration.Tracing.IsEnabled;
+            bool shouldTrace = TracingAdapter.IsEnabled;
             string invocationId = null;
             if (shouldTrace)
             {
-                invocationId = Tracing.NextInvocationId.ToString();
+                invocationId = TracingAdapter.NextInvocationId.ToString();
                 Dictionary<string, object> tracingParameters = new Dictionary<string, object>();
                 tracingParameters.Add("resourceGroupName", resourceGroupName);
                 tracingParameters.Add("accountName", accountName);
                 tracingParameters.Add("parameters", parameters);
-                Tracing.Enter(invocationId, this, "BeginCreatingAsync", tracingParameters);
+                TracingAdapter.Enter(invocationId, this, "BeginCreatingAsync", tracingParameters);
             }
             
             // Construct URL
-            string url = "/subscriptions/" + (this.Client.Credentials.SubscriptionId != null ? this.Client.Credentials.SubscriptionId.Trim() : "") + "/resourceGroups/" + resourceGroupName.Trim() + "/providers/Microsoft.Batch/batchAccounts/" + accountName.Trim() + "?";
-            url = url + "api-version=2014-05-01-privatepreview";
+            string url = "";
+            url = url + "/subscriptions/";
+            if (this.Client.Credentials.SubscriptionId != null)
+            {
+                url = url + Uri.EscapeDataString(this.Client.Credentials.SubscriptionId);
+            }
+            url = url + "/resourceGroups/";
+            url = url + Uri.EscapeDataString(resourceGroupName);
+            url = url + "/providers/";
+            url = url + "Microsoft.Batch";
+            url = url + "/";
+            url = url + "batchAccounts";
+            url = url + "/";
+            url = url + Uri.EscapeDataString(accountName);
+            List<string> queryParameters = new List<string>();
+            queryParameters.Add("api-version=2014-05-01-privatepreview");
+            if (queryParameters.Count > 0)
+            {
+                url = url + "?" + string.Join("&", queryParameters);
+            }
             string baseUrl = this.Client.BaseUri.AbsoluteUri;
             // Trim '/' character from the end of baseUrl and beginning of url.
             if (baseUrl[baseUrl.Length - 1] == '/')
@@ -187,7 +204,7 @@ namespace Microsoft.Azure.Management.Batch
                     }
                 }
                 
-                requestContent = requestDoc.ToString(Formatting.Indented);
+                requestContent = requestDoc.ToString(Newtonsoft.Json.Formatting.Indented);
                 httpRequest.Content = new StringContent(requestContent, Encoding.UTF8);
                 httpRequest.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("application/json; charset=utf-8");
                 
@@ -197,13 +214,13 @@ namespace Microsoft.Azure.Management.Batch
                 {
                     if (shouldTrace)
                     {
-                        Tracing.SendRequest(invocationId, httpRequest);
+                        TracingAdapter.SendRequest(invocationId, httpRequest);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     httpResponse = await this.Client.HttpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
                     if (shouldTrace)
                     {
-                        Tracing.ReceiveResponse(invocationId, httpResponse);
+                        TracingAdapter.ReceiveResponse(invocationId, httpResponse);
                     }
                     HttpStatusCode statusCode = httpResponse.StatusCode;
                     if (statusCode != HttpStatusCode.OK && statusCode != HttpStatusCode.Accepted)
@@ -212,7 +229,7 @@ namespace Microsoft.Azure.Management.Batch
                         CloudException ex = CloudException.Create(httpRequest, requestContent, httpResponse, await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
                         if (shouldTrace)
                         {
-                            Tracing.Error(invocationId, ex);
+                            TracingAdapter.Error(invocationId, ex);
                         }
                         throw ex;
                     }
@@ -220,105 +237,108 @@ namespace Microsoft.Azure.Management.Batch
                     // Create Result
                     BatchAccountCreateResponse result = null;
                     // Deserialize Response
-                    cancellationToken.ThrowIfCancellationRequested();
-                    string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    result = new BatchAccountCreateResponse();
-                    JToken responseDoc = null;
-                    if (string.IsNullOrEmpty(responseContent) == false)
+                    if (statusCode == HttpStatusCode.OK || statusCode == HttpStatusCode.Accepted)
                     {
-                        responseDoc = JToken.Parse(responseContent);
-                    }
-                    
-                    if (responseDoc != null && responseDoc.Type != JTokenType.Null)
-                    {
-                        AccountResource resourceInstance = new AccountResource();
-                        result.Resource = resourceInstance;
-                        
-                        JToken idValue = responseDoc["id"];
-                        if (idValue != null && idValue.Type != JTokenType.Null)
+                        cancellationToken.ThrowIfCancellationRequested();
+                        string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        result = new BatchAccountCreateResponse();
+                        JToken responseDoc = null;
+                        if (string.IsNullOrEmpty(responseContent) == false)
                         {
-                            string idInstance = ((string)idValue);
-                            resourceInstance.Id = idInstance;
+                            responseDoc = JToken.Parse(responseContent);
                         }
                         
-                        JToken typeValue = responseDoc["type"];
-                        if (typeValue != null && typeValue.Type != JTokenType.Null)
+                        if (responseDoc != null && responseDoc.Type != JTokenType.Null)
                         {
-                            string typeInstance = ((string)typeValue);
-                            resourceInstance.Type = typeInstance;
-                        }
-                        
-                        JToken nameValue = responseDoc["name"];
-                        if (nameValue != null && nameValue.Type != JTokenType.Null)
-                        {
-                            string nameInstance = ((string)nameValue);
-                            resourceInstance.Name = nameInstance;
-                        }
-                        
-                        JToken locationValue = responseDoc["location"];
-                        if (locationValue != null && locationValue.Type != JTokenType.Null)
-                        {
-                            string locationInstance = ((string)locationValue);
-                            resourceInstance.Location = locationInstance;
-                        }
-                        
-                        JToken tagsSequenceElement = ((JToken)responseDoc["tags"]);
-                        if (tagsSequenceElement != null && tagsSequenceElement.Type != JTokenType.Null)
-                        {
-                            foreach (JProperty property in tagsSequenceElement)
-                            {
-                                string tagsKey2 = ((string)property.Name);
-                                string tagsValue2 = ((string)property.Value);
-                                resourceInstance.Tags.Add(tagsKey2, tagsValue2);
-                            }
-                        }
-                        
-                        JToken propertiesValue = responseDoc["properties"];
-                        if (propertiesValue != null && propertiesValue.Type != JTokenType.Null)
-                        {
-                            AccountProperties propertiesInstance = new AccountProperties();
-                            resourceInstance.Properties = propertiesInstance;
+                            AccountResource resourceInstance = new AccountResource();
+                            result.Resource = resourceInstance;
                             
-                            JToken accountEndpointValue = propertiesValue["accountEndpoint"];
-                            if (accountEndpointValue != null && accountEndpointValue.Type != JTokenType.Null)
+                            JToken idValue = responseDoc["id"];
+                            if (idValue != null && idValue.Type != JTokenType.Null)
                             {
-                                string accountEndpointInstance = ((string)accountEndpointValue);
-                                propertiesInstance.AccountEndpoint = accountEndpointInstance;
+                                string idInstance = ((string)idValue);
+                                resourceInstance.Id = idInstance;
                             }
                             
-                            JToken provisioningStateValue = propertiesValue["provisioningState"];
-                            if (provisioningStateValue != null && provisioningStateValue.Type != JTokenType.Null)
+                            JToken typeValue = responseDoc["type"];
+                            if (typeValue != null && typeValue.Type != JTokenType.Null)
                             {
-                                AccountProvisioningState provisioningStateInstance = ((AccountProvisioningState)Enum.Parse(typeof(AccountProvisioningState), ((string)provisioningStateValue), true));
-                                propertiesInstance.ProvisioningState = provisioningStateInstance;
+                                string typeInstance = ((string)typeValue);
+                                resourceInstance.Type = typeInstance;
+                            }
+                            
+                            JToken nameValue = responseDoc["name"];
+                            if (nameValue != null && nameValue.Type != JTokenType.Null)
+                            {
+                                string nameInstance = ((string)nameValue);
+                                resourceInstance.Name = nameInstance;
+                            }
+                            
+                            JToken locationValue = responseDoc["location"];
+                            if (locationValue != null && locationValue.Type != JTokenType.Null)
+                            {
+                                string locationInstance = ((string)locationValue);
+                                resourceInstance.Location = locationInstance;
+                            }
+                            
+                            JToken tagsSequenceElement = ((JToken)responseDoc["tags"]);
+                            if (tagsSequenceElement != null && tagsSequenceElement.Type != JTokenType.Null)
+                            {
+                                foreach (JProperty property in tagsSequenceElement)
+                                {
+                                    string tagsKey2 = ((string)property.Name);
+                                    string tagsValue2 = ((string)property.Value);
+                                    resourceInstance.Tags.Add(tagsKey2, tagsValue2);
+                                }
+                            }
+                            
+                            JToken propertiesValue = responseDoc["properties"];
+                            if (propertiesValue != null && propertiesValue.Type != JTokenType.Null)
+                            {
+                                AccountProperties propertiesInstance = new AccountProperties();
+                                resourceInstance.Properties = propertiesInstance;
+                                
+                                JToken accountEndpointValue = propertiesValue["accountEndpoint"];
+                                if (accountEndpointValue != null && accountEndpointValue.Type != JTokenType.Null)
+                                {
+                                    string accountEndpointInstance = ((string)accountEndpointValue);
+                                    propertiesInstance.AccountEndpoint = accountEndpointInstance;
+                                }
+                                
+                                JToken provisioningStateValue = propertiesValue["provisioningState"];
+                                if (provisioningStateValue != null && provisioningStateValue.Type != JTokenType.Null)
+                                {
+                                    AccountProvisioningState provisioningStateInstance = ((AccountProvisioningState)Enum.Parse(typeof(AccountProvisioningState), ((string)provisioningStateValue), true));
+                                    propertiesInstance.ProvisioningState = provisioningStateInstance;
+                                }
+                            }
+                            
+                            BatchManagementError errorInstance = new BatchManagementError();
+                            result.Error = errorInstance;
+                            
+                            JToken codeValue = responseDoc["code"];
+                            if (codeValue != null && codeValue.Type != JTokenType.Null)
+                            {
+                                string codeInstance = ((string)codeValue);
+                                errorInstance.Code = codeInstance;
+                            }
+                            
+                            JToken messageValue = responseDoc["message"];
+                            if (messageValue != null && messageValue.Type != JTokenType.Null)
+                            {
+                                string messageInstance = ((string)messageValue);
+                                errorInstance.Message = messageInstance;
+                            }
+                            
+                            JToken targetValue = responseDoc["target"];
+                            if (targetValue != null && targetValue.Type != JTokenType.Null)
+                            {
+                                string targetInstance = ((string)targetValue);
+                                errorInstance.Target = targetInstance;
                             }
                         }
                         
-                        BatchManagementError errorInstance = new BatchManagementError();
-                        result.Error = errorInstance;
-                        
-                        JToken codeValue = responseDoc["code"];
-                        if (codeValue != null && codeValue.Type != JTokenType.Null)
-                        {
-                            string codeInstance = ((string)codeValue);
-                            errorInstance.Code = codeInstance;
-                        }
-                        
-                        JToken messageValue = responseDoc["message"];
-                        if (messageValue != null && messageValue.Type != JTokenType.Null)
-                        {
-                            string messageInstance = ((string)messageValue);
-                            errorInstance.Message = messageInstance;
-                        }
-                        
-                        JToken targetValue = responseDoc["target"];
-                        if (targetValue != null && targetValue.Type != JTokenType.Null)
-                        {
-                            string targetInstance = ((string)targetValue);
-                            errorInstance.Target = targetInstance;
-                        }
                     }
-                    
                     result.StatusCode = statusCode;
                     if (httpResponse.Headers.Contains("Location"))
                     {
@@ -339,7 +359,7 @@ namespace Microsoft.Azure.Management.Batch
                     
                     if (shouldTrace)
                     {
-                        Tracing.Exit(invocationId, result);
+                        TracingAdapter.Exit(invocationId, result);
                     }
                     return result;
                 }
@@ -391,20 +411,38 @@ namespace Microsoft.Azure.Management.Batch
             }
             
             // Tracing
-            bool shouldTrace = CloudContext.Configuration.Tracing.IsEnabled;
+            bool shouldTrace = TracingAdapter.IsEnabled;
             string invocationId = null;
             if (shouldTrace)
             {
-                invocationId = Tracing.NextInvocationId.ToString();
+                invocationId = TracingAdapter.NextInvocationId.ToString();
                 Dictionary<string, object> tracingParameters = new Dictionary<string, object>();
                 tracingParameters.Add("resourceGroupName", resourceGroupName);
                 tracingParameters.Add("accountName", accountName);
-                Tracing.Enter(invocationId, this, "BeginDeletingAsync", tracingParameters);
+                TracingAdapter.Enter(invocationId, this, "BeginDeletingAsync", tracingParameters);
             }
             
             // Construct URL
-            string url = "/subscriptions/" + (this.Client.Credentials.SubscriptionId != null ? this.Client.Credentials.SubscriptionId.Trim() : "") + "/resourceGroups/" + resourceGroupName.Trim() + "/providers/Microsoft.Batch/batchAccounts/" + accountName.Trim() + "?";
-            url = url + "api-version=2014-05-01-privatepreview";
+            string url = "";
+            url = url + "/subscriptions/";
+            if (this.Client.Credentials.SubscriptionId != null)
+            {
+                url = url + Uri.EscapeDataString(this.Client.Credentials.SubscriptionId);
+            }
+            url = url + "/resourceGroups/";
+            url = url + Uri.EscapeDataString(resourceGroupName);
+            url = url + "/providers/";
+            url = url + "Microsoft.Batch";
+            url = url + "/";
+            url = url + "batchAccounts";
+            url = url + "/";
+            url = url + Uri.EscapeDataString(accountName);
+            List<string> queryParameters = new List<string>();
+            queryParameters.Add("api-version=2014-05-01-privatepreview");
+            if (queryParameters.Count > 0)
+            {
+                url = url + "?" + string.Join("&", queryParameters);
+            }
             string baseUrl = this.Client.BaseUri.AbsoluteUri;
             // Trim '/' character from the end of baseUrl and beginning of url.
             if (baseUrl[baseUrl.Length - 1] == '/')
@@ -438,13 +476,13 @@ namespace Microsoft.Azure.Management.Batch
                 {
                     if (shouldTrace)
                     {
-                        Tracing.SendRequest(invocationId, httpRequest);
+                        TracingAdapter.SendRequest(invocationId, httpRequest);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     httpResponse = await this.Client.HttpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
                     if (shouldTrace)
                     {
-                        Tracing.ReceiveResponse(invocationId, httpResponse);
+                        TracingAdapter.ReceiveResponse(invocationId, httpResponse);
                     }
                     HttpStatusCode statusCode = httpResponse.StatusCode;
                     if (statusCode != HttpStatusCode.OK && statusCode != HttpStatusCode.Accepted && statusCode != HttpStatusCode.NoContent)
@@ -453,13 +491,14 @@ namespace Microsoft.Azure.Management.Batch
                         CloudException ex = CloudException.Create(httpRequest, null, httpResponse, await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
                         if (shouldTrace)
                         {
-                            Tracing.Error(invocationId, ex);
+                            TracingAdapter.Error(invocationId, ex);
                         }
                         throw ex;
                     }
                     
                     // Create Result
                     LongRunningOperationResponse result = null;
+                    // Deserialize Response
                     result = new LongRunningOperationResponse();
                     result.StatusCode = statusCode;
                     if (httpResponse.Headers.Contains("Location"))
@@ -485,7 +524,7 @@ namespace Microsoft.Azure.Management.Batch
                     
                     if (shouldTrace)
                     {
-                        Tracing.Exit(invocationId, result);
+                        TracingAdapter.Exit(invocationId, result);
                     }
                     return result;
                 }
@@ -517,10 +556,11 @@ namespace Microsoft.Azure.Management.Batch
         /// <param name='accountName'>
         /// Required. A name for the Batch account which must be unique within
         /// Azure. Batch account names must be between 3 and 24 characters in
-        /// length, and must use numbers and lower-case letters only. This
-        /// name is the DNS prefix name and can be used to access the batch
-        /// service in the region in which the account is created. For
-        /// example: http://AccountName.task.core.windows.net/.
+        /// length, must use only numbers and lower-case letters and not start
+        /// with a number. This name is used as part of the DNS name that is
+        /// used to access the batch service in the region in which the
+        /// account is created. For example:
+        /// http://AccountName.batch.core.windows.net/.
         /// </param>
         /// <param name='parameters'>
         /// Required. Additional parameters for account creation
@@ -534,72 +574,58 @@ namespace Microsoft.Azure.Management.Batch
         public async Task<BatchAccountCreateResponse> CreateAsync(string resourceGroupName, string accountName, BatchAccountCreateParameters parameters, CancellationToken cancellationToken)
         {
             BatchManagementClient client = this.Client;
-            bool shouldTrace = CloudContext.Configuration.Tracing.IsEnabled;
+            bool shouldTrace = TracingAdapter.IsEnabled;
             string invocationId = null;
             if (shouldTrace)
             {
-                invocationId = Tracing.NextInvocationId.ToString();
+                invocationId = TracingAdapter.NextInvocationId.ToString();
                 Dictionary<string, object> tracingParameters = new Dictionary<string, object>();
                 tracingParameters.Add("resourceGroupName", resourceGroupName);
                 tracingParameters.Add("accountName", accountName);
                 tracingParameters.Add("parameters", parameters);
-                Tracing.Enter(invocationId, this, "CreateAsync", tracingParameters);
+                TracingAdapter.Enter(invocationId, this, "CreateAsync", tracingParameters);
             }
-            try
+            
+            cancellationToken.ThrowIfCancellationRequested();
+            BatchAccountCreateResponse response = await client.Accounts.BeginCreatingAsync(resourceGroupName, accountName, parameters, cancellationToken).ConfigureAwait(false);
+            if (response.Status == OperationStatus.Succeeded)
             {
-                if (shouldTrace)
-                {
-                    client = this.Client.WithHandler(new ClientRequestTrackingHandler(invocationId));
-                }
-                
+                return response;
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            BatchAccountCreateResponse result = await client.GetAccountCreateOperationStatusAsync(response.OperationStatusLink, cancellationToken).ConfigureAwait(false);
+            int delayInSeconds = response.RetryAfter;
+            if (delayInSeconds == 0)
+            {
+                delayInSeconds = 30;
+            }
+            if (client.LongRunningOperationInitialTimeout >= 0)
+            {
+                delayInSeconds = client.LongRunningOperationInitialTimeout;
+            }
+            while ((result.Status != OperationStatus.InProgress) == false)
+            {
                 cancellationToken.ThrowIfCancellationRequested();
-                BatchAccountCreateResponse response = await client.Accounts.BeginCreatingAsync(resourceGroupName, accountName, parameters, cancellationToken).ConfigureAwait(false);
-                if (response.Status == OperationStatus.Succeeded)
-                {
-                    return response;
-                }
+                await TaskEx.Delay(delayInSeconds * 1000, cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
-                BatchAccountCreateResponse result = await client.GetAccountCreateOperationStatusAsync(response.OperationStatusLink, cancellationToken).ConfigureAwait(false);
-                int delayInSeconds = response.RetryAfter;
+                result = await client.GetAccountCreateOperationStatusAsync(response.OperationStatusLink, cancellationToken).ConfigureAwait(false);
+                delayInSeconds = result.RetryAfter;
                 if (delayInSeconds == 0)
                 {
-                    delayInSeconds = 30;
+                    delayInSeconds = 15;
                 }
-                if (client.LongRunningOperationInitialTimeout >= 0)
+                if (client.LongRunningOperationRetryTimeout >= 0)
                 {
-                    delayInSeconds = client.LongRunningOperationInitialTimeout;
+                    delayInSeconds = client.LongRunningOperationRetryTimeout;
                 }
-                while ((result.Status != OperationStatus.InProgress) == false)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    await TaskEx.Delay(delayInSeconds * 1000, cancellationToken).ConfigureAwait(false);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    result = await client.GetAccountCreateOperationStatusAsync(response.OperationStatusLink, cancellationToken).ConfigureAwait(false);
-                    delayInSeconds = result.RetryAfter;
-                    if (delayInSeconds == 0)
-                    {
-                        delayInSeconds = 15;
-                    }
-                    if (client.LongRunningOperationRetryTimeout >= 0)
-                    {
-                        delayInSeconds = client.LongRunningOperationRetryTimeout;
-                    }
-                }
-                
-                if (shouldTrace)
-                {
-                    Tracing.Exit(invocationId, result);
-                }
-                
-                return result;
             }
-            finally
+            
+            if (shouldTrace)
             {
-                if (client != null && shouldTrace)
-                {
-                    client.Dispose();
-                }
+                TracingAdapter.Exit(invocationId, result);
             }
+            
+            return result;
         }
         
         /// <summary>
@@ -623,71 +649,57 @@ namespace Microsoft.Azure.Management.Batch
         public async Task<LongRunningOperationResponse> DeleteAsync(string resourceGroupName, string accountName, CancellationToken cancellationToken)
         {
             BatchManagementClient client = this.Client;
-            bool shouldTrace = CloudContext.Configuration.Tracing.IsEnabled;
+            bool shouldTrace = TracingAdapter.IsEnabled;
             string invocationId = null;
             if (shouldTrace)
             {
-                invocationId = Tracing.NextInvocationId.ToString();
+                invocationId = TracingAdapter.NextInvocationId.ToString();
                 Dictionary<string, object> tracingParameters = new Dictionary<string, object>();
                 tracingParameters.Add("resourceGroupName", resourceGroupName);
                 tracingParameters.Add("accountName", accountName);
-                Tracing.Enter(invocationId, this, "DeleteAsync", tracingParameters);
+                TracingAdapter.Enter(invocationId, this, "DeleteAsync", tracingParameters);
             }
-            try
+            
+            cancellationToken.ThrowIfCancellationRequested();
+            LongRunningOperationResponse response = await client.Accounts.BeginDeletingAsync(resourceGroupName, accountName, cancellationToken).ConfigureAwait(false);
+            if (response.Status == OperationStatus.Succeeded)
             {
-                if (shouldTrace)
-                {
-                    client = this.Client.WithHandler(new ClientRequestTrackingHandler(invocationId));
-                }
-                
+                return response;
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            LongRunningOperationResponse result = await client.GetAccountDeleteOperationStatusAsync(response.OperationStatusLink, cancellationToken).ConfigureAwait(false);
+            int delayInSeconds = response.RetryAfter;
+            if (delayInSeconds == 0)
+            {
+                delayInSeconds = 30;
+            }
+            if (client.LongRunningOperationInitialTimeout >= 0)
+            {
+                delayInSeconds = client.LongRunningOperationInitialTimeout;
+            }
+            while ((result.Status != OperationStatus.InProgress) == false)
+            {
                 cancellationToken.ThrowIfCancellationRequested();
-                LongRunningOperationResponse response = await client.Accounts.BeginDeletingAsync(resourceGroupName, accountName, cancellationToken).ConfigureAwait(false);
-                if (response.Status == OperationStatus.Succeeded)
-                {
-                    return response;
-                }
+                await TaskEx.Delay(delayInSeconds * 1000, cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
-                LongRunningOperationResponse result = await client.GetAccountDeleteOperationStatusAsync(response.OperationStatusLink, cancellationToken).ConfigureAwait(false);
-                int delayInSeconds = response.RetryAfter;
+                result = await client.GetAccountDeleteOperationStatusAsync(response.OperationStatusLink, cancellationToken).ConfigureAwait(false);
+                delayInSeconds = result.RetryAfter;
                 if (delayInSeconds == 0)
                 {
-                    delayInSeconds = 30;
+                    delayInSeconds = 15;
                 }
-                if (client.LongRunningOperationInitialTimeout >= 0)
+                if (client.LongRunningOperationRetryTimeout >= 0)
                 {
-                    delayInSeconds = client.LongRunningOperationInitialTimeout;
+                    delayInSeconds = client.LongRunningOperationRetryTimeout;
                 }
-                while ((result.Status != OperationStatus.InProgress) == false)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    await TaskEx.Delay(delayInSeconds * 1000, cancellationToken).ConfigureAwait(false);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    result = await client.GetAccountDeleteOperationStatusAsync(response.OperationStatusLink, cancellationToken).ConfigureAwait(false);
-                    delayInSeconds = result.RetryAfter;
-                    if (delayInSeconds == 0)
-                    {
-                        delayInSeconds = 15;
-                    }
-                    if (client.LongRunningOperationRetryTimeout >= 0)
-                    {
-                        delayInSeconds = client.LongRunningOperationRetryTimeout;
-                    }
-                }
-                
-                if (shouldTrace)
-                {
-                    Tracing.Exit(invocationId, result);
-                }
-                
-                return result;
             }
-            finally
+            
+            if (shouldTrace)
             {
-                if (client != null && shouldTrace)
-                {
-                    client.Dispose();
-                }
+                TracingAdapter.Exit(invocationId, result);
             }
+            
+            return result;
         }
         
         /// <summary>
@@ -720,20 +732,38 @@ namespace Microsoft.Azure.Management.Batch
             }
             
             // Tracing
-            bool shouldTrace = CloudContext.Configuration.Tracing.IsEnabled;
+            bool shouldTrace = TracingAdapter.IsEnabled;
             string invocationId = null;
             if (shouldTrace)
             {
-                invocationId = Tracing.NextInvocationId.ToString();
+                invocationId = TracingAdapter.NextInvocationId.ToString();
                 Dictionary<string, object> tracingParameters = new Dictionary<string, object>();
                 tracingParameters.Add("resourceGroupName", resourceGroupName);
                 tracingParameters.Add("accountName", accountName);
-                Tracing.Enter(invocationId, this, "GetAsync", tracingParameters);
+                TracingAdapter.Enter(invocationId, this, "GetAsync", tracingParameters);
             }
             
             // Construct URL
-            string url = "/subscriptions/" + (this.Client.Credentials.SubscriptionId != null ? this.Client.Credentials.SubscriptionId.Trim() : "") + "/resourceGroups/" + resourceGroupName.Trim() + "/providers/Microsoft.Batch/batchAccounts/" + accountName.Trim() + "?";
-            url = url + "api-version=2014-05-01-privatepreview";
+            string url = "";
+            url = url + "/subscriptions/";
+            if (this.Client.Credentials.SubscriptionId != null)
+            {
+                url = url + Uri.EscapeDataString(this.Client.Credentials.SubscriptionId);
+            }
+            url = url + "/resourceGroups/";
+            url = url + Uri.EscapeDataString(resourceGroupName);
+            url = url + "/providers/";
+            url = url + "Microsoft.Batch";
+            url = url + "/";
+            url = url + "batchAccounts";
+            url = url + "/";
+            url = url + Uri.EscapeDataString(accountName);
+            List<string> queryParameters = new List<string>();
+            queryParameters.Add("api-version=2014-05-01-privatepreview");
+            if (queryParameters.Count > 0)
+            {
+                url = url + "?" + string.Join("&", queryParameters);
+            }
             string baseUrl = this.Client.BaseUri.AbsoluteUri;
             // Trim '/' character from the end of baseUrl and beginning of url.
             if (baseUrl[baseUrl.Length - 1] == '/')
@@ -768,13 +798,13 @@ namespace Microsoft.Azure.Management.Batch
                 {
                     if (shouldTrace)
                     {
-                        Tracing.SendRequest(invocationId, httpRequest);
+                        TracingAdapter.SendRequest(invocationId, httpRequest);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     httpResponse = await this.Client.HttpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
                     if (shouldTrace)
                     {
-                        Tracing.ReceiveResponse(invocationId, httpResponse);
+                        TracingAdapter.ReceiveResponse(invocationId, httpResponse);
                     }
                     HttpStatusCode statusCode = httpResponse.StatusCode;
                     if (statusCode != HttpStatusCode.OK)
@@ -783,7 +813,7 @@ namespace Microsoft.Azure.Management.Batch
                         CloudException ex = CloudException.Create(httpRequest, null, httpResponse, await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
                         if (shouldTrace)
                         {
-                            Tracing.Error(invocationId, ex);
+                            TracingAdapter.Error(invocationId, ex);
                         }
                         throw ex;
                     }
@@ -791,81 +821,84 @@ namespace Microsoft.Azure.Management.Batch
                     // Create Result
                     BatchAccountGetResponse result = null;
                     // Deserialize Response
-                    cancellationToken.ThrowIfCancellationRequested();
-                    string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    result = new BatchAccountGetResponse();
-                    JToken responseDoc = null;
-                    if (string.IsNullOrEmpty(responseContent) == false)
+                    if (statusCode == HttpStatusCode.OK)
                     {
-                        responseDoc = JToken.Parse(responseContent);
-                    }
-                    
-                    if (responseDoc != null && responseDoc.Type != JTokenType.Null)
-                    {
-                        AccountResource resourceInstance = new AccountResource();
-                        result.Resource = resourceInstance;
-                        
-                        JToken idValue = responseDoc["id"];
-                        if (idValue != null && idValue.Type != JTokenType.Null)
+                        cancellationToken.ThrowIfCancellationRequested();
+                        string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        result = new BatchAccountGetResponse();
+                        JToken responseDoc = null;
+                        if (string.IsNullOrEmpty(responseContent) == false)
                         {
-                            string idInstance = ((string)idValue);
-                            resourceInstance.Id = idInstance;
+                            responseDoc = JToken.Parse(responseContent);
                         }
                         
-                        JToken typeValue = responseDoc["type"];
-                        if (typeValue != null && typeValue.Type != JTokenType.Null)
+                        if (responseDoc != null && responseDoc.Type != JTokenType.Null)
                         {
-                            string typeInstance = ((string)typeValue);
-                            resourceInstance.Type = typeInstance;
-                        }
-                        
-                        JToken nameValue = responseDoc["name"];
-                        if (nameValue != null && nameValue.Type != JTokenType.Null)
-                        {
-                            string nameInstance = ((string)nameValue);
-                            resourceInstance.Name = nameInstance;
-                        }
-                        
-                        JToken locationValue = responseDoc["location"];
-                        if (locationValue != null && locationValue.Type != JTokenType.Null)
-                        {
-                            string locationInstance = ((string)locationValue);
-                            resourceInstance.Location = locationInstance;
-                        }
-                        
-                        JToken tagsSequenceElement = ((JToken)responseDoc["tags"]);
-                        if (tagsSequenceElement != null && tagsSequenceElement.Type != JTokenType.Null)
-                        {
-                            foreach (JProperty property in tagsSequenceElement)
-                            {
-                                string tagsKey = ((string)property.Name);
-                                string tagsValue = ((string)property.Value);
-                                resourceInstance.Tags.Add(tagsKey, tagsValue);
-                            }
-                        }
-                        
-                        JToken propertiesValue = responseDoc["properties"];
-                        if (propertiesValue != null && propertiesValue.Type != JTokenType.Null)
-                        {
-                            AccountProperties propertiesInstance = new AccountProperties();
-                            resourceInstance.Properties = propertiesInstance;
+                            AccountResource resourceInstance = new AccountResource();
+                            result.Resource = resourceInstance;
                             
-                            JToken accountEndpointValue = propertiesValue["accountEndpoint"];
-                            if (accountEndpointValue != null && accountEndpointValue.Type != JTokenType.Null)
+                            JToken idValue = responseDoc["id"];
+                            if (idValue != null && idValue.Type != JTokenType.Null)
                             {
-                                string accountEndpointInstance = ((string)accountEndpointValue);
-                                propertiesInstance.AccountEndpoint = accountEndpointInstance;
+                                string idInstance = ((string)idValue);
+                                resourceInstance.Id = idInstance;
                             }
                             
-                            JToken provisioningStateValue = propertiesValue["provisioningState"];
-                            if (provisioningStateValue != null && provisioningStateValue.Type != JTokenType.Null)
+                            JToken typeValue = responseDoc["type"];
+                            if (typeValue != null && typeValue.Type != JTokenType.Null)
                             {
-                                AccountProvisioningState provisioningStateInstance = ((AccountProvisioningState)Enum.Parse(typeof(AccountProvisioningState), ((string)provisioningStateValue), true));
-                                propertiesInstance.ProvisioningState = provisioningStateInstance;
+                                string typeInstance = ((string)typeValue);
+                                resourceInstance.Type = typeInstance;
+                            }
+                            
+                            JToken nameValue = responseDoc["name"];
+                            if (nameValue != null && nameValue.Type != JTokenType.Null)
+                            {
+                                string nameInstance = ((string)nameValue);
+                                resourceInstance.Name = nameInstance;
+                            }
+                            
+                            JToken locationValue = responseDoc["location"];
+                            if (locationValue != null && locationValue.Type != JTokenType.Null)
+                            {
+                                string locationInstance = ((string)locationValue);
+                                resourceInstance.Location = locationInstance;
+                            }
+                            
+                            JToken tagsSequenceElement = ((JToken)responseDoc["tags"]);
+                            if (tagsSequenceElement != null && tagsSequenceElement.Type != JTokenType.Null)
+                            {
+                                foreach (JProperty property in tagsSequenceElement)
+                                {
+                                    string tagsKey = ((string)property.Name);
+                                    string tagsValue = ((string)property.Value);
+                                    resourceInstance.Tags.Add(tagsKey, tagsValue);
+                                }
+                            }
+                            
+                            JToken propertiesValue = responseDoc["properties"];
+                            if (propertiesValue != null && propertiesValue.Type != JTokenType.Null)
+                            {
+                                AccountProperties propertiesInstance = new AccountProperties();
+                                resourceInstance.Properties = propertiesInstance;
+                                
+                                JToken accountEndpointValue = propertiesValue["accountEndpoint"];
+                                if (accountEndpointValue != null && accountEndpointValue.Type != JTokenType.Null)
+                                {
+                                    string accountEndpointInstance = ((string)accountEndpointValue);
+                                    propertiesInstance.AccountEndpoint = accountEndpointInstance;
+                                }
+                                
+                                JToken provisioningStateValue = propertiesValue["provisioningState"];
+                                if (provisioningStateValue != null && provisioningStateValue.Type != JTokenType.Null)
+                                {
+                                    AccountProvisioningState provisioningStateInstance = ((AccountProvisioningState)Enum.Parse(typeof(AccountProvisioningState), ((string)provisioningStateValue), true));
+                                    propertiesInstance.ProvisioningState = provisioningStateInstance;
+                                }
                             }
                         }
+                        
                     }
-                    
                     result.StatusCode = statusCode;
                     if (httpResponse.Headers.Contains("x-ms-request-id"))
                     {
@@ -874,7 +907,7 @@ namespace Microsoft.Azure.Management.Batch
                     
                     if (shouldTrace)
                     {
-                        Tracing.Exit(invocationId, result);
+                        TracingAdapter.Exit(invocationId, result);
                     }
                     return result;
                 }
@@ -916,24 +949,38 @@ namespace Microsoft.Azure.Management.Batch
             // Validate
             
             // Tracing
-            bool shouldTrace = CloudContext.Configuration.Tracing.IsEnabled;
+            bool shouldTrace = TracingAdapter.IsEnabled;
             string invocationId = null;
             if (shouldTrace)
             {
-                invocationId = Tracing.NextInvocationId.ToString();
+                invocationId = TracingAdapter.NextInvocationId.ToString();
                 Dictionary<string, object> tracingParameters = new Dictionary<string, object>();
                 tracingParameters.Add("parameters", parameters);
-                Tracing.Enter(invocationId, this, "ListAsync", tracingParameters);
+                TracingAdapter.Enter(invocationId, this, "ListAsync", tracingParameters);
             }
             
             // Construct URL
-            string url = "/subscriptions/" + (this.Client.Credentials.SubscriptionId != null ? this.Client.Credentials.SubscriptionId.Trim() : "") + "/";
+            string url = "";
+            url = url + "/subscriptions/";
+            if (this.Client.Credentials.SubscriptionId != null)
+            {
+                url = url + Uri.EscapeDataString(this.Client.Credentials.SubscriptionId);
+            }
+            url = url + "/";
             if (parameters != null && parameters.ResourceGroupName != null)
             {
-                url = url + "resourceGroups/" + Uri.EscapeDataString(parameters.ResourceGroupName != null ? parameters.ResourceGroupName.Trim() : "") + "/";
+                url = url + "resourceGroups/" + Uri.EscapeDataString(parameters.ResourceGroupName) + "/";
             }
-            url = url + "providers/Microsoft.Batch/batchAccounts?";
-            url = url + "api-version=2014-05-01-privatepreview";
+            url = url + "providers/";
+            url = url + "Microsoft.Batch";
+            url = url + "/";
+            url = url + "batchAccounts";
+            List<string> queryParameters = new List<string>();
+            queryParameters.Add("api-version=2014-05-01-privatepreview");
+            if (queryParameters.Count > 0)
+            {
+                url = url + "?" + string.Join("&", queryParameters);
+            }
             string baseUrl = this.Client.BaseUri.AbsoluteUri;
             // Trim '/' character from the end of baseUrl and beginning of url.
             if (baseUrl[baseUrl.Length - 1] == '/')
@@ -968,13 +1015,13 @@ namespace Microsoft.Azure.Management.Batch
                 {
                     if (shouldTrace)
                     {
-                        Tracing.SendRequest(invocationId, httpRequest);
+                        TracingAdapter.SendRequest(invocationId, httpRequest);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     httpResponse = await this.Client.HttpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
                     if (shouldTrace)
                     {
-                        Tracing.ReceiveResponse(invocationId, httpResponse);
+                        TracingAdapter.ReceiveResponse(invocationId, httpResponse);
                     }
                     HttpStatusCode statusCode = httpResponse.StatusCode;
                     if (statusCode != HttpStatusCode.OK)
@@ -983,7 +1030,7 @@ namespace Microsoft.Azure.Management.Batch
                         CloudException ex = CloudException.Create(httpRequest, null, httpResponse, await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
                         if (shouldTrace)
                         {
-                            Tracing.Error(invocationId, ex);
+                            TracingAdapter.Error(invocationId, ex);
                         }
                         throw ex;
                     }
@@ -991,95 +1038,98 @@ namespace Microsoft.Azure.Management.Batch
                     // Create Result
                     BatchAccountListResponse result = null;
                     // Deserialize Response
-                    cancellationToken.ThrowIfCancellationRequested();
-                    string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    result = new BatchAccountListResponse();
-                    JToken responseDoc = null;
-                    if (string.IsNullOrEmpty(responseContent) == false)
+                    if (statusCode == HttpStatusCode.OK)
                     {
-                        responseDoc = JToken.Parse(responseContent);
-                    }
-                    
-                    if (responseDoc != null && responseDoc.Type != JTokenType.Null)
-                    {
-                        JToken valueArray = responseDoc["value"];
-                        if (valueArray != null && valueArray.Type != JTokenType.Null)
+                        cancellationToken.ThrowIfCancellationRequested();
+                        string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        result = new BatchAccountListResponse();
+                        JToken responseDoc = null;
+                        if (string.IsNullOrEmpty(responseContent) == false)
                         {
-                            foreach (JToken valueValue in ((JArray)valueArray))
+                            responseDoc = JToken.Parse(responseContent);
+                        }
+                        
+                        if (responseDoc != null && responseDoc.Type != JTokenType.Null)
+                        {
+                            JToken valueArray = responseDoc["value"];
+                            if (valueArray != null && valueArray.Type != JTokenType.Null)
                             {
-                                AccountResource accountResourceInstance = new AccountResource();
-                                result.Accounts.Add(accountResourceInstance);
-                                
-                                JToken idValue = valueValue["id"];
-                                if (idValue != null && idValue.Type != JTokenType.Null)
+                                foreach (JToken valueValue in ((JArray)valueArray))
                                 {
-                                    string idInstance = ((string)idValue);
-                                    accountResourceInstance.Id = idInstance;
-                                }
-                                
-                                JToken typeValue = valueValue["type"];
-                                if (typeValue != null && typeValue.Type != JTokenType.Null)
-                                {
-                                    string typeInstance = ((string)typeValue);
-                                    accountResourceInstance.Type = typeInstance;
-                                }
-                                
-                                JToken nameValue = valueValue["name"];
-                                if (nameValue != null && nameValue.Type != JTokenType.Null)
-                                {
-                                    string nameInstance = ((string)nameValue);
-                                    accountResourceInstance.Name = nameInstance;
-                                }
-                                
-                                JToken locationValue = valueValue["location"];
-                                if (locationValue != null && locationValue.Type != JTokenType.Null)
-                                {
-                                    string locationInstance = ((string)locationValue);
-                                    accountResourceInstance.Location = locationInstance;
-                                }
-                                
-                                JToken tagsSequenceElement = ((JToken)valueValue["tags"]);
-                                if (tagsSequenceElement != null && tagsSequenceElement.Type != JTokenType.Null)
-                                {
-                                    foreach (JProperty property in tagsSequenceElement)
-                                    {
-                                        string tagsKey = ((string)property.Name);
-                                        string tagsValue = ((string)property.Value);
-                                        accountResourceInstance.Tags.Add(tagsKey, tagsValue);
-                                    }
-                                }
-                                
-                                JToken propertiesValue = valueValue["properties"];
-                                if (propertiesValue != null && propertiesValue.Type != JTokenType.Null)
-                                {
-                                    AccountProperties propertiesInstance = new AccountProperties();
-                                    accountResourceInstance.Properties = propertiesInstance;
+                                    AccountResource accountResourceInstance = new AccountResource();
+                                    result.Accounts.Add(accountResourceInstance);
                                     
-                                    JToken accountEndpointValue = propertiesValue["accountEndpoint"];
-                                    if (accountEndpointValue != null && accountEndpointValue.Type != JTokenType.Null)
+                                    JToken idValue = valueValue["id"];
+                                    if (idValue != null && idValue.Type != JTokenType.Null)
                                     {
-                                        string accountEndpointInstance = ((string)accountEndpointValue);
-                                        propertiesInstance.AccountEndpoint = accountEndpointInstance;
+                                        string idInstance = ((string)idValue);
+                                        accountResourceInstance.Id = idInstance;
                                     }
                                     
-                                    JToken provisioningStateValue = propertiesValue["provisioningState"];
-                                    if (provisioningStateValue != null && provisioningStateValue.Type != JTokenType.Null)
+                                    JToken typeValue = valueValue["type"];
+                                    if (typeValue != null && typeValue.Type != JTokenType.Null)
                                     {
-                                        AccountProvisioningState provisioningStateInstance = ((AccountProvisioningState)Enum.Parse(typeof(AccountProvisioningState), ((string)provisioningStateValue), true));
-                                        propertiesInstance.ProvisioningState = provisioningStateInstance;
+                                        string typeInstance = ((string)typeValue);
+                                        accountResourceInstance.Type = typeInstance;
+                                    }
+                                    
+                                    JToken nameValue = valueValue["name"];
+                                    if (nameValue != null && nameValue.Type != JTokenType.Null)
+                                    {
+                                        string nameInstance = ((string)nameValue);
+                                        accountResourceInstance.Name = nameInstance;
+                                    }
+                                    
+                                    JToken locationValue = valueValue["location"];
+                                    if (locationValue != null && locationValue.Type != JTokenType.Null)
+                                    {
+                                        string locationInstance = ((string)locationValue);
+                                        accountResourceInstance.Location = locationInstance;
+                                    }
+                                    
+                                    JToken tagsSequenceElement = ((JToken)valueValue["tags"]);
+                                    if (tagsSequenceElement != null && tagsSequenceElement.Type != JTokenType.Null)
+                                    {
+                                        foreach (JProperty property in tagsSequenceElement)
+                                        {
+                                            string tagsKey = ((string)property.Name);
+                                            string tagsValue = ((string)property.Value);
+                                            accountResourceInstance.Tags.Add(tagsKey, tagsValue);
+                                        }
+                                    }
+                                    
+                                    JToken propertiesValue = valueValue["properties"];
+                                    if (propertiesValue != null && propertiesValue.Type != JTokenType.Null)
+                                    {
+                                        AccountProperties propertiesInstance = new AccountProperties();
+                                        accountResourceInstance.Properties = propertiesInstance;
+                                        
+                                        JToken accountEndpointValue = propertiesValue["accountEndpoint"];
+                                        if (accountEndpointValue != null && accountEndpointValue.Type != JTokenType.Null)
+                                        {
+                                            string accountEndpointInstance = ((string)accountEndpointValue);
+                                            propertiesInstance.AccountEndpoint = accountEndpointInstance;
+                                        }
+                                        
+                                        JToken provisioningStateValue = propertiesValue["provisioningState"];
+                                        if (provisioningStateValue != null && provisioningStateValue.Type != JTokenType.Null)
+                                        {
+                                            AccountProvisioningState provisioningStateInstance = ((AccountProvisioningState)Enum.Parse(typeof(AccountProvisioningState), ((string)provisioningStateValue), true));
+                                            propertiesInstance.ProvisioningState = provisioningStateInstance;
+                                        }
                                     }
                                 }
                             }
+                            
+                            JToken nextLinkValue = responseDoc["nextLink"];
+                            if (nextLinkValue != null && nextLinkValue.Type != JTokenType.Null)
+                            {
+                                string nextLinkInstance = ((string)nextLinkValue);
+                                result.NextLink = nextLinkInstance;
+                            }
                         }
                         
-                        JToken nextLinkValue = responseDoc["nextLink"];
-                        if (nextLinkValue != null && nextLinkValue.Type != JTokenType.Null)
-                        {
-                            string nextLinkInstance = ((string)nextLinkValue);
-                            result.NextLink = nextLinkInstance;
-                        }
                     }
-                    
                     result.StatusCode = statusCode;
                     if (httpResponse.Headers.Contains("x-ms-request-id"))
                     {
@@ -1088,7 +1138,7 @@ namespace Microsoft.Azure.Management.Batch
                     
                     if (shouldTrace)
                     {
-                        Tracing.Exit(invocationId, result);
+                        TracingAdapter.Exit(invocationId, result);
                     }
                     return result;
                 }
@@ -1124,18 +1174,31 @@ namespace Microsoft.Azure.Management.Batch
             // Validate
             
             // Tracing
-            bool shouldTrace = CloudContext.Configuration.Tracing.IsEnabled;
+            bool shouldTrace = TracingAdapter.IsEnabled;
             string invocationId = null;
             if (shouldTrace)
             {
-                invocationId = Tracing.NextInvocationId.ToString();
+                invocationId = TracingAdapter.NextInvocationId.ToString();
                 Dictionary<string, object> tracingParameters = new Dictionary<string, object>();
-                Tracing.Enter(invocationId, this, "ListActionsAsync", tracingParameters);
+                TracingAdapter.Enter(invocationId, this, "ListActionsAsync", tracingParameters);
             }
             
             // Construct URL
-            string url = "/subscriptions/" + (this.Client.Credentials.SubscriptionId != null ? this.Client.Credentials.SubscriptionId.Trim() : "") + "/providers/Microsoft.Batch/actions?";
-            url = url + "api-version=2014-05-01-privatepreview";
+            string url = "";
+            url = url + "/subscriptions/";
+            if (this.Client.Credentials.SubscriptionId != null)
+            {
+                url = url + Uri.EscapeDataString(this.Client.Credentials.SubscriptionId);
+            }
+            url = url + "/providers/";
+            url = url + "Microsoft.Batch";
+            url = url + "/actions";
+            List<string> queryParameters = new List<string>();
+            queryParameters.Add("api-version=2014-05-01-privatepreview");
+            if (queryParameters.Count > 0)
+            {
+                url = url + "?" + string.Join("&", queryParameters);
+            }
             string baseUrl = this.Client.BaseUri.AbsoluteUri;
             // Trim '/' character from the end of baseUrl and beginning of url.
             if (baseUrl[baseUrl.Length - 1] == '/')
@@ -1170,13 +1233,13 @@ namespace Microsoft.Azure.Management.Batch
                 {
                     if (shouldTrace)
                     {
-                        Tracing.SendRequest(invocationId, httpRequest);
+                        TracingAdapter.SendRequest(invocationId, httpRequest);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     httpResponse = await this.Client.HttpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
                     if (shouldTrace)
                     {
-                        Tracing.ReceiveResponse(invocationId, httpResponse);
+                        TracingAdapter.ReceiveResponse(invocationId, httpResponse);
                     }
                     HttpStatusCode statusCode = httpResponse.StatusCode;
                     if (statusCode != HttpStatusCode.OK)
@@ -1185,7 +1248,7 @@ namespace Microsoft.Azure.Management.Batch
                         CloudException ex = CloudException.Create(httpRequest, null, httpResponse, await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
                         if (shouldTrace)
                         {
-                            Tracing.Error(invocationId, ex);
+                            TracingAdapter.Error(invocationId, ex);
                         }
                         throw ex;
                     }
@@ -1193,56 +1256,59 @@ namespace Microsoft.Azure.Management.Batch
                     // Create Result
                     BatchAccountListActionsResponse result = null;
                     // Deserialize Response
-                    cancellationToken.ThrowIfCancellationRequested();
-                    string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    result = new BatchAccountListActionsResponse();
-                    JToken responseDoc = null;
-                    if (string.IsNullOrEmpty(responseContent) == false)
+                    if (statusCode == HttpStatusCode.OK)
                     {
-                        responseDoc = JToken.Parse(responseContent);
-                    }
-                    
-                    if (responseDoc != null && responseDoc.Type != JTokenType.Null)
-                    {
-                        JToken actionsArray = responseDoc;
-                        if (actionsArray != null && actionsArray.Type != JTokenType.Null)
+                        cancellationToken.ThrowIfCancellationRequested();
+                        string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        result = new BatchAccountListActionsResponse();
+                        JToken responseDoc = null;
+                        if (string.IsNullOrEmpty(responseContent) == false)
                         {
-                            foreach (JToken actionsValue in ((JArray)actionsArray))
+                            responseDoc = JToken.Parse(responseContent);
+                        }
+                        
+                        if (responseDoc != null && responseDoc.Type != JTokenType.Null)
+                        {
+                            JToken actionsArray = responseDoc;
+                            if (actionsArray != null && actionsArray.Type != JTokenType.Null)
                             {
-                                AccountActions accountActionsInstance = new AccountActions();
-                                result.Actions.Add(accountActionsInstance);
-                                
-                                JToken actionValue = actionsValue["action"];
-                                if (actionValue != null && actionValue.Type != JTokenType.Null)
+                                foreach (JToken actionsValue in ((JArray)actionsArray))
                                 {
-                                    string actionInstance = ((string)actionValue);
-                                    accountActionsInstance.Action = actionInstance;
-                                }
-                                
-                                JToken friendlyNameValue = actionsValue["friendlyName"];
-                                if (friendlyNameValue != null && friendlyNameValue.Type != JTokenType.Null)
-                                {
-                                    string friendlyNameInstance = ((string)friendlyNameValue);
-                                    accountActionsInstance.FriendlyName = friendlyNameInstance;
-                                }
-                                
-                                JToken friendlyTargetValue = actionsValue["friendlyTarget"];
-                                if (friendlyTargetValue != null && friendlyTargetValue.Type != JTokenType.Null)
-                                {
-                                    string friendlyTargetInstance = ((string)friendlyTargetValue);
-                                    accountActionsInstance.FriendlyTarget = friendlyTargetInstance;
-                                }
-                                
-                                JToken friendlyDescriptionValue = actionsValue["friendlyDescription"];
-                                if (friendlyDescriptionValue != null && friendlyDescriptionValue.Type != JTokenType.Null)
-                                {
-                                    string friendlyDescriptionInstance = ((string)friendlyDescriptionValue);
-                                    accountActionsInstance.FriendlyDescription = friendlyDescriptionInstance;
+                                    AccountActions accountActionsInstance = new AccountActions();
+                                    result.Actions.Add(accountActionsInstance);
+                                    
+                                    JToken actionValue = actionsValue["action"];
+                                    if (actionValue != null && actionValue.Type != JTokenType.Null)
+                                    {
+                                        string actionInstance = ((string)actionValue);
+                                        accountActionsInstance.Action = actionInstance;
+                                    }
+                                    
+                                    JToken friendlyNameValue = actionsValue["friendlyName"];
+                                    if (friendlyNameValue != null && friendlyNameValue.Type != JTokenType.Null)
+                                    {
+                                        string friendlyNameInstance = ((string)friendlyNameValue);
+                                        accountActionsInstance.FriendlyName = friendlyNameInstance;
+                                    }
+                                    
+                                    JToken friendlyTargetValue = actionsValue["friendlyTarget"];
+                                    if (friendlyTargetValue != null && friendlyTargetValue.Type != JTokenType.Null)
+                                    {
+                                        string friendlyTargetInstance = ((string)friendlyTargetValue);
+                                        accountActionsInstance.FriendlyTarget = friendlyTargetInstance;
+                                    }
+                                    
+                                    JToken friendlyDescriptionValue = actionsValue["friendlyDescription"];
+                                    if (friendlyDescriptionValue != null && friendlyDescriptionValue.Type != JTokenType.Null)
+                                    {
+                                        string friendlyDescriptionInstance = ((string)friendlyDescriptionValue);
+                                        accountActionsInstance.FriendlyDescription = friendlyDescriptionInstance;
+                                    }
                                 }
                             }
                         }
+                        
                     }
-                    
                     result.StatusCode = statusCode;
                     if (httpResponse.Headers.Contains("x-ms-request-id"))
                     {
@@ -1251,7 +1317,7 @@ namespace Microsoft.Azure.Management.Batch
                     
                     if (shouldTrace)
                     {
-                        Tracing.Exit(invocationId, result);
+                        TracingAdapter.Exit(invocationId, result);
                     }
                     return result;
                 }
@@ -1302,20 +1368,39 @@ namespace Microsoft.Azure.Management.Batch
             }
             
             // Tracing
-            bool shouldTrace = CloudContext.Configuration.Tracing.IsEnabled;
+            bool shouldTrace = TracingAdapter.IsEnabled;
             string invocationId = null;
             if (shouldTrace)
             {
-                invocationId = Tracing.NextInvocationId.ToString();
+                invocationId = TracingAdapter.NextInvocationId.ToString();
                 Dictionary<string, object> tracingParameters = new Dictionary<string, object>();
                 tracingParameters.Add("resourceGroupName", resourceGroupName);
                 tracingParameters.Add("accountName", accountName);
-                Tracing.Enter(invocationId, this, "ListKeysAsync", tracingParameters);
+                TracingAdapter.Enter(invocationId, this, "ListKeysAsync", tracingParameters);
             }
             
             // Construct URL
-            string url = "/subscriptions/" + (this.Client.Credentials.SubscriptionId != null ? this.Client.Credentials.SubscriptionId.Trim() : "") + "/resourceGroups/" + resourceGroupName.Trim() + "/providers/Microsoft.Batch/batchAccounts/" + accountName.Trim() + "/listKeys?";
-            url = url + "api-version=2014-05-01-privatepreview";
+            string url = "";
+            url = url + "/subscriptions/";
+            if (this.Client.Credentials.SubscriptionId != null)
+            {
+                url = url + Uri.EscapeDataString(this.Client.Credentials.SubscriptionId);
+            }
+            url = url + "/resourceGroups/";
+            url = url + Uri.EscapeDataString(resourceGroupName);
+            url = url + "/providers/";
+            url = url + "Microsoft.Batch";
+            url = url + "/";
+            url = url + "batchAccounts";
+            url = url + "/";
+            url = url + Uri.EscapeDataString(accountName);
+            url = url + "/listKeys";
+            List<string> queryParameters = new List<string>();
+            queryParameters.Add("api-version=2014-05-01-privatepreview");
+            if (queryParameters.Count > 0)
+            {
+                url = url + "?" + string.Join("&", queryParameters);
+            }
             string baseUrl = this.Client.BaseUri.AbsoluteUri;
             // Trim '/' character from the end of baseUrl and beginning of url.
             if (baseUrl[baseUrl.Length - 1] == '/')
@@ -1350,13 +1435,13 @@ namespace Microsoft.Azure.Management.Batch
                 {
                     if (shouldTrace)
                     {
-                        Tracing.SendRequest(invocationId, httpRequest);
+                        TracingAdapter.SendRequest(invocationId, httpRequest);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     httpResponse = await this.Client.HttpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
                     if (shouldTrace)
                     {
-                        Tracing.ReceiveResponse(invocationId, httpResponse);
+                        TracingAdapter.ReceiveResponse(invocationId, httpResponse);
                     }
                     HttpStatusCode statusCode = httpResponse.StatusCode;
                     if (statusCode != HttpStatusCode.OK)
@@ -1365,7 +1450,7 @@ namespace Microsoft.Azure.Management.Batch
                         CloudException ex = CloudException.Create(httpRequest, null, httpResponse, await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
                         if (shouldTrace)
                         {
-                            Tracing.Error(invocationId, ex);
+                            TracingAdapter.Error(invocationId, ex);
                         }
                         throw ex;
                     }
@@ -1373,32 +1458,35 @@ namespace Microsoft.Azure.Management.Batch
                     // Create Result
                     BatchAccountListKeyResponse result = null;
                     // Deserialize Response
-                    cancellationToken.ThrowIfCancellationRequested();
-                    string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    result = new BatchAccountListKeyResponse();
-                    JToken responseDoc = null;
-                    if (string.IsNullOrEmpty(responseContent) == false)
+                    if (statusCode == HttpStatusCode.OK)
                     {
-                        responseDoc = JToken.Parse(responseContent);
-                    }
-                    
-                    if (responseDoc != null && responseDoc.Type != JTokenType.Null)
-                    {
-                        JToken primaryValue = responseDoc["primary"];
-                        if (primaryValue != null && primaryValue.Type != JTokenType.Null)
+                        cancellationToken.ThrowIfCancellationRequested();
+                        string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        result = new BatchAccountListKeyResponse();
+                        JToken responseDoc = null;
+                        if (string.IsNullOrEmpty(responseContent) == false)
                         {
-                            string primaryInstance = ((string)primaryValue);
-                            result.PrimaryKey = primaryInstance;
+                            responseDoc = JToken.Parse(responseContent);
                         }
                         
-                        JToken secondaryValue = responseDoc["secondary"];
-                        if (secondaryValue != null && secondaryValue.Type != JTokenType.Null)
+                        if (responseDoc != null && responseDoc.Type != JTokenType.Null)
                         {
-                            string secondaryInstance = ((string)secondaryValue);
-                            result.SecondaryKey = secondaryInstance;
+                            JToken primaryValue = responseDoc["primary"];
+                            if (primaryValue != null && primaryValue.Type != JTokenType.Null)
+                            {
+                                string primaryInstance = ((string)primaryValue);
+                                result.PrimaryKey = primaryInstance;
+                            }
+                            
+                            JToken secondaryValue = responseDoc["secondary"];
+                            if (secondaryValue != null && secondaryValue.Type != JTokenType.Null)
+                            {
+                                string secondaryInstance = ((string)secondaryValue);
+                                result.SecondaryKey = secondaryInstance;
+                            }
                         }
+                        
                     }
-                    
                     result.StatusCode = statusCode;
                     if (httpResponse.Headers.Contains("x-ms-request-id"))
                     {
@@ -1407,7 +1495,7 @@ namespace Microsoft.Azure.Management.Batch
                     
                     if (shouldTrace)
                     {
-                        Tracing.Exit(invocationId, result);
+                        TracingAdapter.Exit(invocationId, result);
                     }
                     return result;
                 }
@@ -1451,18 +1539,20 @@ namespace Microsoft.Azure.Management.Batch
             }
             
             // Tracing
-            bool shouldTrace = CloudContext.Configuration.Tracing.IsEnabled;
+            bool shouldTrace = TracingAdapter.IsEnabled;
             string invocationId = null;
             if (shouldTrace)
             {
-                invocationId = Tracing.NextInvocationId.ToString();
+                invocationId = TracingAdapter.NextInvocationId.ToString();
                 Dictionary<string, object> tracingParameters = new Dictionary<string, object>();
                 tracingParameters.Add("nextLink", nextLink);
-                Tracing.Enter(invocationId, this, "ListNextAsync", tracingParameters);
+                TracingAdapter.Enter(invocationId, this, "ListNextAsync", tracingParameters);
             }
             
             // Construct URL
-            string url = nextLink.Trim();
+            string url = "";
+            url = url + nextLink;
+            url = url.Replace(" ", "%20");
             
             // Create HTTP transport objects
             HttpRequestMessage httpRequest = null;
@@ -1484,13 +1574,13 @@ namespace Microsoft.Azure.Management.Batch
                 {
                     if (shouldTrace)
                     {
-                        Tracing.SendRequest(invocationId, httpRequest);
+                        TracingAdapter.SendRequest(invocationId, httpRequest);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     httpResponse = await this.Client.HttpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
                     if (shouldTrace)
                     {
-                        Tracing.ReceiveResponse(invocationId, httpResponse);
+                        TracingAdapter.ReceiveResponse(invocationId, httpResponse);
                     }
                     HttpStatusCode statusCode = httpResponse.StatusCode;
                     if (statusCode != HttpStatusCode.OK)
@@ -1499,7 +1589,7 @@ namespace Microsoft.Azure.Management.Batch
                         CloudException ex = CloudException.Create(httpRequest, null, httpResponse, await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
                         if (shouldTrace)
                         {
-                            Tracing.Error(invocationId, ex);
+                            TracingAdapter.Error(invocationId, ex);
                         }
                         throw ex;
                     }
@@ -1507,95 +1597,98 @@ namespace Microsoft.Azure.Management.Batch
                     // Create Result
                     BatchAccountListResponse result = null;
                     // Deserialize Response
-                    cancellationToken.ThrowIfCancellationRequested();
-                    string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    result = new BatchAccountListResponse();
-                    JToken responseDoc = null;
-                    if (string.IsNullOrEmpty(responseContent) == false)
+                    if (statusCode == HttpStatusCode.OK)
                     {
-                        responseDoc = JToken.Parse(responseContent);
-                    }
-                    
-                    if (responseDoc != null && responseDoc.Type != JTokenType.Null)
-                    {
-                        JToken valueArray = responseDoc["value"];
-                        if (valueArray != null && valueArray.Type != JTokenType.Null)
+                        cancellationToken.ThrowIfCancellationRequested();
+                        string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        result = new BatchAccountListResponse();
+                        JToken responseDoc = null;
+                        if (string.IsNullOrEmpty(responseContent) == false)
                         {
-                            foreach (JToken valueValue in ((JArray)valueArray))
+                            responseDoc = JToken.Parse(responseContent);
+                        }
+                        
+                        if (responseDoc != null && responseDoc.Type != JTokenType.Null)
+                        {
+                            JToken valueArray = responseDoc["value"];
+                            if (valueArray != null && valueArray.Type != JTokenType.Null)
                             {
-                                AccountResource accountResourceInstance = new AccountResource();
-                                result.Accounts.Add(accountResourceInstance);
-                                
-                                JToken idValue = valueValue["id"];
-                                if (idValue != null && idValue.Type != JTokenType.Null)
+                                foreach (JToken valueValue in ((JArray)valueArray))
                                 {
-                                    string idInstance = ((string)idValue);
-                                    accountResourceInstance.Id = idInstance;
-                                }
-                                
-                                JToken typeValue = valueValue["type"];
-                                if (typeValue != null && typeValue.Type != JTokenType.Null)
-                                {
-                                    string typeInstance = ((string)typeValue);
-                                    accountResourceInstance.Type = typeInstance;
-                                }
-                                
-                                JToken nameValue = valueValue["name"];
-                                if (nameValue != null && nameValue.Type != JTokenType.Null)
-                                {
-                                    string nameInstance = ((string)nameValue);
-                                    accountResourceInstance.Name = nameInstance;
-                                }
-                                
-                                JToken locationValue = valueValue["location"];
-                                if (locationValue != null && locationValue.Type != JTokenType.Null)
-                                {
-                                    string locationInstance = ((string)locationValue);
-                                    accountResourceInstance.Location = locationInstance;
-                                }
-                                
-                                JToken tagsSequenceElement = ((JToken)valueValue["tags"]);
-                                if (tagsSequenceElement != null && tagsSequenceElement.Type != JTokenType.Null)
-                                {
-                                    foreach (JProperty property in tagsSequenceElement)
-                                    {
-                                        string tagsKey = ((string)property.Name);
-                                        string tagsValue = ((string)property.Value);
-                                        accountResourceInstance.Tags.Add(tagsKey, tagsValue);
-                                    }
-                                }
-                                
-                                JToken propertiesValue = valueValue["properties"];
-                                if (propertiesValue != null && propertiesValue.Type != JTokenType.Null)
-                                {
-                                    AccountProperties propertiesInstance = new AccountProperties();
-                                    accountResourceInstance.Properties = propertiesInstance;
+                                    AccountResource accountResourceInstance = new AccountResource();
+                                    result.Accounts.Add(accountResourceInstance);
                                     
-                                    JToken accountEndpointValue = propertiesValue["accountEndpoint"];
-                                    if (accountEndpointValue != null && accountEndpointValue.Type != JTokenType.Null)
+                                    JToken idValue = valueValue["id"];
+                                    if (idValue != null && idValue.Type != JTokenType.Null)
                                     {
-                                        string accountEndpointInstance = ((string)accountEndpointValue);
-                                        propertiesInstance.AccountEndpoint = accountEndpointInstance;
+                                        string idInstance = ((string)idValue);
+                                        accountResourceInstance.Id = idInstance;
                                     }
                                     
-                                    JToken provisioningStateValue = propertiesValue["provisioningState"];
-                                    if (provisioningStateValue != null && provisioningStateValue.Type != JTokenType.Null)
+                                    JToken typeValue = valueValue["type"];
+                                    if (typeValue != null && typeValue.Type != JTokenType.Null)
                                     {
-                                        AccountProvisioningState provisioningStateInstance = ((AccountProvisioningState)Enum.Parse(typeof(AccountProvisioningState), ((string)provisioningStateValue), true));
-                                        propertiesInstance.ProvisioningState = provisioningStateInstance;
+                                        string typeInstance = ((string)typeValue);
+                                        accountResourceInstance.Type = typeInstance;
+                                    }
+                                    
+                                    JToken nameValue = valueValue["name"];
+                                    if (nameValue != null && nameValue.Type != JTokenType.Null)
+                                    {
+                                        string nameInstance = ((string)nameValue);
+                                        accountResourceInstance.Name = nameInstance;
+                                    }
+                                    
+                                    JToken locationValue = valueValue["location"];
+                                    if (locationValue != null && locationValue.Type != JTokenType.Null)
+                                    {
+                                        string locationInstance = ((string)locationValue);
+                                        accountResourceInstance.Location = locationInstance;
+                                    }
+                                    
+                                    JToken tagsSequenceElement = ((JToken)valueValue["tags"]);
+                                    if (tagsSequenceElement != null && tagsSequenceElement.Type != JTokenType.Null)
+                                    {
+                                        foreach (JProperty property in tagsSequenceElement)
+                                        {
+                                            string tagsKey = ((string)property.Name);
+                                            string tagsValue = ((string)property.Value);
+                                            accountResourceInstance.Tags.Add(tagsKey, tagsValue);
+                                        }
+                                    }
+                                    
+                                    JToken propertiesValue = valueValue["properties"];
+                                    if (propertiesValue != null && propertiesValue.Type != JTokenType.Null)
+                                    {
+                                        AccountProperties propertiesInstance = new AccountProperties();
+                                        accountResourceInstance.Properties = propertiesInstance;
+                                        
+                                        JToken accountEndpointValue = propertiesValue["accountEndpoint"];
+                                        if (accountEndpointValue != null && accountEndpointValue.Type != JTokenType.Null)
+                                        {
+                                            string accountEndpointInstance = ((string)accountEndpointValue);
+                                            propertiesInstance.AccountEndpoint = accountEndpointInstance;
+                                        }
+                                        
+                                        JToken provisioningStateValue = propertiesValue["provisioningState"];
+                                        if (provisioningStateValue != null && provisioningStateValue.Type != JTokenType.Null)
+                                        {
+                                            AccountProvisioningState provisioningStateInstance = ((AccountProvisioningState)Enum.Parse(typeof(AccountProvisioningState), ((string)provisioningStateValue), true));
+                                            propertiesInstance.ProvisioningState = provisioningStateInstance;
+                                        }
                                     }
                                 }
                             }
+                            
+                            JToken nextLinkValue = responseDoc["nextLink"];
+                            if (nextLinkValue != null && nextLinkValue.Type != JTokenType.Null)
+                            {
+                                string nextLinkInstance = ((string)nextLinkValue);
+                                result.NextLink = nextLinkInstance;
+                            }
                         }
                         
-                        JToken nextLinkValue = responseDoc["nextLink"];
-                        if (nextLinkValue != null && nextLinkValue.Type != JTokenType.Null)
-                        {
-                            string nextLinkInstance = ((string)nextLinkValue);
-                            result.NextLink = nextLinkInstance;
-                        }
                     }
-                    
                     result.StatusCode = statusCode;
                     if (httpResponse.Headers.Contains("x-ms-request-id"))
                     {
@@ -1604,7 +1697,7 @@ namespace Microsoft.Azure.Management.Batch
                     
                     if (shouldTrace)
                     {
-                        Tracing.Exit(invocationId, result);
+                        TracingAdapter.Exit(invocationId, result);
                     }
                     return result;
                 }
@@ -1662,21 +1755,40 @@ namespace Microsoft.Azure.Management.Batch
             }
             
             // Tracing
-            bool shouldTrace = CloudContext.Configuration.Tracing.IsEnabled;
+            bool shouldTrace = TracingAdapter.IsEnabled;
             string invocationId = null;
             if (shouldTrace)
             {
-                invocationId = Tracing.NextInvocationId.ToString();
+                invocationId = TracingAdapter.NextInvocationId.ToString();
                 Dictionary<string, object> tracingParameters = new Dictionary<string, object>();
                 tracingParameters.Add("resourceGroupName", resourceGroupName);
                 tracingParameters.Add("accountName", accountName);
                 tracingParameters.Add("parameters", parameters);
-                Tracing.Enter(invocationId, this, "RegenerateKeyAsync", tracingParameters);
+                TracingAdapter.Enter(invocationId, this, "RegenerateKeyAsync", tracingParameters);
             }
             
             // Construct URL
-            string url = "/subscriptions/" + (this.Client.Credentials.SubscriptionId != null ? this.Client.Credentials.SubscriptionId.Trim() : "") + "/resourceGroups/" + resourceGroupName.Trim() + "/providers/Microsoft.Batch/batchAccounts/" + accountName.Trim() + "/regenerateKeys?";
-            url = url + "api-version=2014-05-01-privatepreview";
+            string url = "";
+            url = url + "/subscriptions/";
+            if (this.Client.Credentials.SubscriptionId != null)
+            {
+                url = url + Uri.EscapeDataString(this.Client.Credentials.SubscriptionId);
+            }
+            url = url + "/resourceGroups/";
+            url = url + Uri.EscapeDataString(resourceGroupName);
+            url = url + "/providers/";
+            url = url + "Microsoft.Batch";
+            url = url + "/";
+            url = url + "batchAccounts";
+            url = url + "/";
+            url = url + Uri.EscapeDataString(accountName);
+            url = url + "/regenerateKeys";
+            List<string> queryParameters = new List<string>();
+            queryParameters.Add("api-version=2014-05-01-privatepreview");
+            if (queryParameters.Count > 0)
+            {
+                url = url + "?" + string.Join("&", queryParameters);
+            }
             string baseUrl = this.Client.BaseUri.AbsoluteUri;
             // Trim '/' character from the end of baseUrl and beginning of url.
             if (baseUrl[baseUrl.Length - 1] == '/')
@@ -1714,7 +1826,7 @@ namespace Microsoft.Azure.Management.Batch
                 
                 batchAccountRegenerateKeyParametersValue["keyName"] = parameters.KeyName.ToString();
                 
-                requestContent = requestDoc.ToString(Formatting.Indented);
+                requestContent = requestDoc.ToString(Newtonsoft.Json.Formatting.Indented);
                 httpRequest.Content = new StringContent(requestContent, Encoding.UTF8);
                 httpRequest.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("application/json; charset=utf-8");
                 
@@ -1724,13 +1836,13 @@ namespace Microsoft.Azure.Management.Batch
                 {
                     if (shouldTrace)
                     {
-                        Tracing.SendRequest(invocationId, httpRequest);
+                        TracingAdapter.SendRequest(invocationId, httpRequest);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     httpResponse = await this.Client.HttpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
                     if (shouldTrace)
                     {
-                        Tracing.ReceiveResponse(invocationId, httpResponse);
+                        TracingAdapter.ReceiveResponse(invocationId, httpResponse);
                     }
                     HttpStatusCode statusCode = httpResponse.StatusCode;
                     if (statusCode != HttpStatusCode.OK)
@@ -1739,7 +1851,7 @@ namespace Microsoft.Azure.Management.Batch
                         CloudException ex = CloudException.Create(httpRequest, requestContent, httpResponse, await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
                         if (shouldTrace)
                         {
-                            Tracing.Error(invocationId, ex);
+                            TracingAdapter.Error(invocationId, ex);
                         }
                         throw ex;
                     }
@@ -1747,32 +1859,35 @@ namespace Microsoft.Azure.Management.Batch
                     // Create Result
                     BatchAccountRegenerateKeyResponse result = null;
                     // Deserialize Response
-                    cancellationToken.ThrowIfCancellationRequested();
-                    string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    result = new BatchAccountRegenerateKeyResponse();
-                    JToken responseDoc = null;
-                    if (string.IsNullOrEmpty(responseContent) == false)
+                    if (statusCode == HttpStatusCode.OK)
                     {
-                        responseDoc = JToken.Parse(responseContent);
-                    }
-                    
-                    if (responseDoc != null && responseDoc.Type != JTokenType.Null)
-                    {
-                        JToken primaryValue = responseDoc["primary"];
-                        if (primaryValue != null && primaryValue.Type != JTokenType.Null)
+                        cancellationToken.ThrowIfCancellationRequested();
+                        string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        result = new BatchAccountRegenerateKeyResponse();
+                        JToken responseDoc = null;
+                        if (string.IsNullOrEmpty(responseContent) == false)
                         {
-                            string primaryInstance = ((string)primaryValue);
-                            result.PrimaryKey = primaryInstance;
+                            responseDoc = JToken.Parse(responseContent);
                         }
                         
-                        JToken secondaryValue = responseDoc["secondary"];
-                        if (secondaryValue != null && secondaryValue.Type != JTokenType.Null)
+                        if (responseDoc != null && responseDoc.Type != JTokenType.Null)
                         {
-                            string secondaryInstance = ((string)secondaryValue);
-                            result.SecondaryKey = secondaryInstance;
+                            JToken primaryValue = responseDoc["primary"];
+                            if (primaryValue != null && primaryValue.Type != JTokenType.Null)
+                            {
+                                string primaryInstance = ((string)primaryValue);
+                                result.PrimaryKey = primaryInstance;
+                            }
+                            
+                            JToken secondaryValue = responseDoc["secondary"];
+                            if (secondaryValue != null && secondaryValue.Type != JTokenType.Null)
+                            {
+                                string secondaryInstance = ((string)secondaryValue);
+                                result.SecondaryKey = secondaryInstance;
+                            }
                         }
+                        
                     }
-                    
                     result.StatusCode = statusCode;
                     if (httpResponse.Headers.Contains("x-ms-request-id"))
                     {
@@ -1781,7 +1896,7 @@ namespace Microsoft.Azure.Management.Batch
                     
                     if (shouldTrace)
                     {
-                        Tracing.Exit(invocationId, result);
+                        TracingAdapter.Exit(invocationId, result);
                     }
                     return result;
                 }
@@ -1839,21 +1954,39 @@ namespace Microsoft.Azure.Management.Batch
             }
             
             // Tracing
-            bool shouldTrace = CloudContext.Configuration.Tracing.IsEnabled;
+            bool shouldTrace = TracingAdapter.IsEnabled;
             string invocationId = null;
             if (shouldTrace)
             {
-                invocationId = Tracing.NextInvocationId.ToString();
+                invocationId = TracingAdapter.NextInvocationId.ToString();
                 Dictionary<string, object> tracingParameters = new Dictionary<string, object>();
                 tracingParameters.Add("resourceGroupName", resourceGroupName);
                 tracingParameters.Add("accountName", accountName);
                 tracingParameters.Add("parameters", parameters);
-                Tracing.Enter(invocationId, this, "UpdateAsync", tracingParameters);
+                TracingAdapter.Enter(invocationId, this, "UpdateAsync", tracingParameters);
             }
             
             // Construct URL
-            string url = "/subscriptions/" + (this.Client.Credentials.SubscriptionId != null ? this.Client.Credentials.SubscriptionId.Trim() : "") + "/resourceGroups/" + resourceGroupName.Trim() + "/providers/Microsoft.Batch/batchAccounts/" + accountName.Trim() + "?";
-            url = url + "api-version=2014-05-01-privatepreview";
+            string url = "";
+            url = url + "/subscriptions/";
+            if (this.Client.Credentials.SubscriptionId != null)
+            {
+                url = url + Uri.EscapeDataString(this.Client.Credentials.SubscriptionId);
+            }
+            url = url + "/resourceGroups/";
+            url = url + Uri.EscapeDataString(resourceGroupName);
+            url = url + "/providers/";
+            url = url + "Microsoft.Batch";
+            url = url + "/";
+            url = url + "batchAccounts";
+            url = url + "/";
+            url = url + Uri.EscapeDataString(accountName);
+            List<string> queryParameters = new List<string>();
+            queryParameters.Add("api-version=2014-05-01-privatepreview");
+            if (queryParameters.Count > 0)
+            {
+                url = url + "?" + string.Join("&", queryParameters);
+            }
             string baseUrl = this.Client.BaseUri.AbsoluteUri;
             // Trim '/' character from the end of baseUrl and beginning of url.
             if (baseUrl[baseUrl.Length - 1] == '/')
@@ -1904,7 +2037,7 @@ namespace Microsoft.Azure.Management.Batch
                     }
                 }
                 
-                requestContent = requestDoc.ToString(Formatting.Indented);
+                requestContent = requestDoc.ToString(Newtonsoft.Json.Formatting.Indented);
                 httpRequest.Content = new StringContent(requestContent, Encoding.UTF8);
                 httpRequest.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("application/json; charset=utf-8");
                 
@@ -1914,13 +2047,13 @@ namespace Microsoft.Azure.Management.Batch
                 {
                     if (shouldTrace)
                     {
-                        Tracing.SendRequest(invocationId, httpRequest);
+                        TracingAdapter.SendRequest(invocationId, httpRequest);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     httpResponse = await this.Client.HttpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
                     if (shouldTrace)
                     {
-                        Tracing.ReceiveResponse(invocationId, httpResponse);
+                        TracingAdapter.ReceiveResponse(invocationId, httpResponse);
                     }
                     HttpStatusCode statusCode = httpResponse.StatusCode;
                     if (statusCode != HttpStatusCode.OK)
@@ -1929,7 +2062,7 @@ namespace Microsoft.Azure.Management.Batch
                         CloudException ex = CloudException.Create(httpRequest, requestContent, httpResponse, await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
                         if (shouldTrace)
                         {
-                            Tracing.Error(invocationId, ex);
+                            TracingAdapter.Error(invocationId, ex);
                         }
                         throw ex;
                     }
@@ -1937,81 +2070,84 @@ namespace Microsoft.Azure.Management.Batch
                     // Create Result
                     BatchAccountUpdateResponse result = null;
                     // Deserialize Response
-                    cancellationToken.ThrowIfCancellationRequested();
-                    string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    result = new BatchAccountUpdateResponse();
-                    JToken responseDoc = null;
-                    if (string.IsNullOrEmpty(responseContent) == false)
+                    if (statusCode == HttpStatusCode.OK)
                     {
-                        responseDoc = JToken.Parse(responseContent);
-                    }
-                    
-                    if (responseDoc != null && responseDoc.Type != JTokenType.Null)
-                    {
-                        AccountResource resourceInstance = new AccountResource();
-                        result.Resource = resourceInstance;
-                        
-                        JToken idValue = responseDoc["id"];
-                        if (idValue != null && idValue.Type != JTokenType.Null)
+                        cancellationToken.ThrowIfCancellationRequested();
+                        string responseContent = await httpResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        result = new BatchAccountUpdateResponse();
+                        JToken responseDoc = null;
+                        if (string.IsNullOrEmpty(responseContent) == false)
                         {
-                            string idInstance = ((string)idValue);
-                            resourceInstance.Id = idInstance;
+                            responseDoc = JToken.Parse(responseContent);
                         }
                         
-                        JToken typeValue = responseDoc["type"];
-                        if (typeValue != null && typeValue.Type != JTokenType.Null)
+                        if (responseDoc != null && responseDoc.Type != JTokenType.Null)
                         {
-                            string typeInstance = ((string)typeValue);
-                            resourceInstance.Type = typeInstance;
-                        }
-                        
-                        JToken nameValue = responseDoc["name"];
-                        if (nameValue != null && nameValue.Type != JTokenType.Null)
-                        {
-                            string nameInstance = ((string)nameValue);
-                            resourceInstance.Name = nameInstance;
-                        }
-                        
-                        JToken locationValue = responseDoc["location"];
-                        if (locationValue != null && locationValue.Type != JTokenType.Null)
-                        {
-                            string locationInstance = ((string)locationValue);
-                            resourceInstance.Location = locationInstance;
-                        }
-                        
-                        JToken tagsSequenceElement = ((JToken)responseDoc["tags"]);
-                        if (tagsSequenceElement != null && tagsSequenceElement.Type != JTokenType.Null)
-                        {
-                            foreach (JProperty property in tagsSequenceElement)
-                            {
-                                string tagsKey2 = ((string)property.Name);
-                                string tagsValue2 = ((string)property.Value);
-                                resourceInstance.Tags.Add(tagsKey2, tagsValue2);
-                            }
-                        }
-                        
-                        JToken propertiesValue = responseDoc["properties"];
-                        if (propertiesValue != null && propertiesValue.Type != JTokenType.Null)
-                        {
-                            AccountProperties propertiesInstance = new AccountProperties();
-                            resourceInstance.Properties = propertiesInstance;
+                            AccountResource resourceInstance = new AccountResource();
+                            result.Resource = resourceInstance;
                             
-                            JToken accountEndpointValue = propertiesValue["accountEndpoint"];
-                            if (accountEndpointValue != null && accountEndpointValue.Type != JTokenType.Null)
+                            JToken idValue = responseDoc["id"];
+                            if (idValue != null && idValue.Type != JTokenType.Null)
                             {
-                                string accountEndpointInstance = ((string)accountEndpointValue);
-                                propertiesInstance.AccountEndpoint = accountEndpointInstance;
+                                string idInstance = ((string)idValue);
+                                resourceInstance.Id = idInstance;
                             }
                             
-                            JToken provisioningStateValue = propertiesValue["provisioningState"];
-                            if (provisioningStateValue != null && provisioningStateValue.Type != JTokenType.Null)
+                            JToken typeValue = responseDoc["type"];
+                            if (typeValue != null && typeValue.Type != JTokenType.Null)
                             {
-                                AccountProvisioningState provisioningStateInstance = ((AccountProvisioningState)Enum.Parse(typeof(AccountProvisioningState), ((string)provisioningStateValue), true));
-                                propertiesInstance.ProvisioningState = provisioningStateInstance;
+                                string typeInstance = ((string)typeValue);
+                                resourceInstance.Type = typeInstance;
+                            }
+                            
+                            JToken nameValue = responseDoc["name"];
+                            if (nameValue != null && nameValue.Type != JTokenType.Null)
+                            {
+                                string nameInstance = ((string)nameValue);
+                                resourceInstance.Name = nameInstance;
+                            }
+                            
+                            JToken locationValue = responseDoc["location"];
+                            if (locationValue != null && locationValue.Type != JTokenType.Null)
+                            {
+                                string locationInstance = ((string)locationValue);
+                                resourceInstance.Location = locationInstance;
+                            }
+                            
+                            JToken tagsSequenceElement = ((JToken)responseDoc["tags"]);
+                            if (tagsSequenceElement != null && tagsSequenceElement.Type != JTokenType.Null)
+                            {
+                                foreach (JProperty property in tagsSequenceElement)
+                                {
+                                    string tagsKey2 = ((string)property.Name);
+                                    string tagsValue2 = ((string)property.Value);
+                                    resourceInstance.Tags.Add(tagsKey2, tagsValue2);
+                                }
+                            }
+                            
+                            JToken propertiesValue = responseDoc["properties"];
+                            if (propertiesValue != null && propertiesValue.Type != JTokenType.Null)
+                            {
+                                AccountProperties propertiesInstance = new AccountProperties();
+                                resourceInstance.Properties = propertiesInstance;
+                                
+                                JToken accountEndpointValue = propertiesValue["accountEndpoint"];
+                                if (accountEndpointValue != null && accountEndpointValue.Type != JTokenType.Null)
+                                {
+                                    string accountEndpointInstance = ((string)accountEndpointValue);
+                                    propertiesInstance.AccountEndpoint = accountEndpointInstance;
+                                }
+                                
+                                JToken provisioningStateValue = propertiesValue["provisioningState"];
+                                if (provisioningStateValue != null && provisioningStateValue.Type != JTokenType.Null)
+                                {
+                                    AccountProvisioningState provisioningStateInstance = ((AccountProvisioningState)Enum.Parse(typeof(AccountProvisioningState), ((string)provisioningStateValue), true));
+                                    propertiesInstance.ProvisioningState = provisioningStateInstance;
+                                }
                             }
                         }
+                        
                     }
-                    
                     result.StatusCode = statusCode;
                     if (httpResponse.Headers.Contains("x-ms-request-id"))
                     {
@@ -2020,7 +2156,7 @@ namespace Microsoft.Azure.Management.Batch
                     
                     if (shouldTrace)
                     {
-                        Tracing.Exit(invocationId, result);
+                        TracingAdapter.Exit(invocationId, result);
                     }
                     return result;
                 }

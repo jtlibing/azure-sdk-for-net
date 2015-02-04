@@ -22,9 +22,9 @@
 using System;
 using System.Linq;
 using System.Net.Http;
+using Hyak.Common;
+using Microsoft.Azure;
 using Microsoft.Azure.Management.Sql;
-using Microsoft.WindowsAzure;
-using Microsoft.WindowsAzure.Common;
 
 namespace Microsoft.Azure.Management.Sql
 {
@@ -103,6 +103,19 @@ namespace Microsoft.Azure.Management.Sql
             get { return this._databases; }
         }
         
+        private IDataMaskingOperations _dataMasking;
+        
+        /// <summary>
+        /// Represents all the operations for operating on Azure SQL Database
+        /// data masking. Contains operations to: Create, Retrieve, Update,
+        /// and Delete data masking rules, as well as Create, Retreive and
+        /// Update data masking policy.
+        /// </summary>
+        public virtual IDataMaskingOperations DataMasking
+        {
+            get { return this._dataMasking; }
+        }
+        
         private IFirewallRuleOperations _firewallRules;
         
         /// <summary>
@@ -142,10 +155,11 @@ namespace Microsoft.Azure.Management.Sql
         /// <summary>
         /// Initializes a new instance of the SqlManagementClient class.
         /// </summary>
-        private SqlManagementClient()
+        public SqlManagementClient()
             : base()
         {
             this._databases = new DatabaseOperations(this);
+            this._dataMasking = new DataMaskingOperations(this);
             this._firewallRules = new FirewallRuleOperations(this);
             this._databaseSecurity = new SecurityOperations(this);
             this._servers = new ServerOperations(this);
@@ -211,10 +225,11 @@ namespace Microsoft.Azure.Management.Sql
         /// <param name='httpClient'>
         /// The Http client
         /// </param>
-        private SqlManagementClient(HttpClient httpClient)
+        public SqlManagementClient(HttpClient httpClient)
             : base(httpClient)
         {
             this._databases = new DatabaseOperations(this);
+            this._dataMasking = new DataMaskingOperations(this);
             this._firewallRules = new FirewallRuleOperations(this);
             this._databaseSecurity = new SecurityOperations(this);
             this._servers = new ServerOperations(this);

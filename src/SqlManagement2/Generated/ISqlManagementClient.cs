@@ -21,8 +21,8 @@
 
 using System;
 using System.Linq;
+using Microsoft.Azure;
 using Microsoft.Azure.Management.Sql;
-using Microsoft.WindowsAzure;
 
 namespace Microsoft.Azure.Management.Sql
 {
@@ -83,6 +83,17 @@ namespace Microsoft.Azure.Management.Sql
         /// a database.
         /// </summary>
         IDatabaseOperations Databases
+        {
+            get; 
+        }
+        
+        /// <summary>
+        /// Represents all the operations for operating on Azure SQL Database
+        /// data masking. Contains operations to: Create, Retrieve, Update,
+        /// and Delete data masking rules, as well as Create, Retreive and
+        /// Update data masking policy.
+        /// </summary>
+        IDataMaskingOperations DataMasking
         {
             get; 
         }
