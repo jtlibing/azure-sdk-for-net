@@ -48,19 +48,5 @@ namespace Microsoft.Azure.Management.TrafficManager.Models
         public Profile()
         {
         }
-        
-        /// <summary>
-        /// Initializes a new instance of the Profile class with required
-        /// arguments.
-        /// </summary>
-        public Profile(string location)
-            : this()
-        {
-            if (location == null)
-            {
-                throw new ArgumentNullException("location");
-            }
-            this.Location = location;
-        }
     }
 }
