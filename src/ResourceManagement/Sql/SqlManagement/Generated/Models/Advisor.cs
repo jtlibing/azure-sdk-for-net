@@ -48,19 +48,5 @@ namespace Microsoft.Azure.Management.Sql.Models
         public Advisor()
         {
         }
-        
-        /// <summary>
-        /// Initializes a new instance of the Advisor class with required
-        /// arguments.
-        /// </summary>
-        public Advisor(string location)
-            : this()
-        {
-            if (location == null)
-            {
-                throw new ArgumentNullException("location");
-            }
-            this.Location = location;
-        }
     }
 }

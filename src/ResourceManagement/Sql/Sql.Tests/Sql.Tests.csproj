@@ -15,6 +15,7 @@
     <Compile Include="ScenarioTests\Sql2.AdvisorScenarioTest.cs" />
     <Compile Include="ScenarioTests\Sql2.BlobAuditScenarioTest.cs" />
     <Compile Include="ScenarioTests\Sql2.BackupScenarioTests.cs" />
+    <Compile Include="ScenarioTests\Sql2.DataSyncScenarioTest.cs" />
     <Compile Include="ScenarioTests\Sql2.ImportExportScenarioTest.cs" />
     <Compile Include="ScenarioTests\Sql2.JobAccountScenarioTests.cs" />
     <Compile Include="ScenarioTests\Sql2.SecurityAlertScenarioTest.cs" />
@@ -78,6 +79,15 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="SessionRecords\Sql2.Tests.ScenarioTests.Sql2BackupScenarioTest\GeoBackupPolicyTest.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="SessionRecords\Sql2.Tests.ScenarioTests.Sql2DataSyncScenarioTests\SyncGroupCRUDTest.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="SessionRecords\Sql2.Tests.ScenarioTests.Sql2DataSyncScenarioTests\SyncAgentCRUDTest.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="SessionRecords\Sql2.Tests.ScenarioTests.Sql2DataSyncScenarioTests\SyncMemberCRUDTest.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="SessionRecords\Sql2.Tests.ScenarioTests.Sql2ImportExportScenarioTests\ExportDatabaseTest.json">

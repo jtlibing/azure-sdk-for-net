@@ -112,10 +112,6 @@ namespace Microsoft.Azure.Management.Sql
             {
                 throw new ArgumentNullException("parameters");
             }
-            if (parameters.Location == null)
-            {
-                throw new ArgumentNullException("parameters.Location");
-            }
             if (parameters.Properties == null)
             {
                 throw new ArgumentNullException("parameters.Properties");
@@ -199,7 +195,10 @@ namespace Microsoft.Azure.Management.Sql
                 
                 propertiesValue["databaseId"] = parameters.Properties.DatabaseId;
                 
-                jobAccountCreateOrUpdateParametersValue["location"] = parameters.Location;
+                if (parameters.Location != null)
+                {
+                    jobAccountCreateOrUpdateParametersValue["location"] = parameters.Location;
+                }
                 
                 if (parameters.Tags != null)
                 {
@@ -1171,11 +1170,11 @@ namespace Microsoft.Azure.Management.Sql
                     {
                         result.Status = OperationStatus.Succeeded;
                     }
-                    if (statusCode == HttpStatusCode.Created)
+                    if (statusCode == HttpStatusCode.OK)
                     {
                         result.Status = OperationStatus.Succeeded;
                     }
-                    if (statusCode == HttpStatusCode.OK)
+                    if (statusCode == HttpStatusCode.Created)
                     {
                         result.Status = OperationStatus.Succeeded;
                     }
